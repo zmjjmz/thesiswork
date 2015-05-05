@@ -6,7 +6,7 @@ import cv2
 import matplotlib.pyplot as plt
 import glob
 from os.path import join, exists, isdir
-from os import mkdir
+from os import mkdir, remove
 
 from matplotlib.widgets import Button, RectangleSelector
 
@@ -35,6 +35,7 @@ def collect_segs(pic_fn):
     for i in range(len(all_masks)):
         segmentations.append({key:join(segfolder,"%d.%s.pkl" % (i,key)) for key in keys})
     return segmentations
+
 
 def main_init(datafolder):
     """ Read in the image, show it and set buttons up """
@@ -90,6 +91,7 @@ def main_init(datafolder):
                 self.cur_indv_ind -= 1
             self.cur_mask_ind = len(self.mask_dict[self.cur_indv][self.cur_indv_ind])-1
             self.redraw_all()
+
         def apply_segmentation(self, coords):
             # actually take the coords and call grabcut
             # we're going to assume that cur_mask_ind points to the previous mask
@@ -111,10 +113,21 @@ def main_init(datafolder):
             self.cur_mask_ind += 1
             seg_dict = self.save_segmentation(mask, fgd_mod, bgd_mod)
             # chop off the old list of segmentations
+            old_seg_dicts = self.mask_dict[self.cur_indv][self.cur_indv_ind]
             new_seg_dicts = self.mask_dict[self.cur_indv][self.cur_indv_ind][:self.cur_mask_ind]
             # major TODO: clean up segmentations currently in that directory ahead of this one
             new_seg_dicts.append(seg_dict)
             self.mask_dict[self.cur_indv][self.cur_indv_ind] = new_seg_dicts
+            self.cleanup_previous_files(old_seg_dicts)
+
+        def cleanup_previous_files(self, old_seg_dicts):
+            # look at the segmentation files past the current index and delete them
+            for seg_ind, seg in enumerate(old_seg_dicts):
+                # assume self.cur_mask_ind corresponds to the most recent segmentation applied, thus we want to delete the ones greater
+                if seg_ind > self.cur_mask_ind:
+                    keys = ['mask','fgd','bgd']
+                    for key in keys:
+                        remove(seg[key])
 
         def undo_segmentation(self, event):
             # actually just move the mask index back 1, no need to recompute
@@ -124,6 +137,7 @@ def main_init(datafolder):
                 self.cur_mask_ind = -1
             else:
                 self.redraw_all()
+
         def redo_segmentation(self, event):
             # move the mask index up 1 (if possible)
             self.cur_mask_ind += 1
@@ -132,6 +146,7 @@ def main_init(datafolder):
                 self.cur_mask_ind -= 1
             else:
                 self.redraw_all()
+
         def recv_segmentation(self, eclick, erelease):
             # the onselect event that gets the final box
             # get bounding box and (maybe?) convert it to pixel space, then pass on to apply_segmentation
