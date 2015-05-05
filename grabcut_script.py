@@ -25,7 +25,7 @@ def read_data(folder_root):
 
 def collect_segs(pic_fn):
     # lots of assumptions
-    segfolder = pic_fn.split('.')[0]
+    segfolder = pic_fn.split('.')[0] + '_segs'
     segmentations = []
     all_masks = glob.glob(join(segfolder,'*.mask.pkl'))
     #all_bgd = glob.glob(join(segfolder,'*.bgd.pkl'))
@@ -52,7 +52,7 @@ def main_init(datafolder):
             self.imgax = self.fig.add_subplot(121)
             # state for the segmenter callbacks
             self.segax = self.fig.add_subplot(122)
-            self.cur_mask_ind = -1
+            self.cur_mask_ind = len(self.mask_dict[self.cur_indv][self.cur_indv_ind])-1
             # general state
             self.redraw_all()
 
@@ -74,6 +74,7 @@ def main_init(datafolder):
                 self.cur_indv_ind = 0
             else:
                 self.cur_indv_ind += 1
+            self.cur_mask_ind = len(self.mask_dict[self.cur_indv][self.cur_indv_ind])-1
             self.redraw_all()
 
         def prev(self, event):
@@ -87,6 +88,7 @@ def main_init(datafolder):
                 self.cur_indv_ind = len(self.indv_dict[self.cur_indv])-1
             else:
                 self.cur_indv_ind -= 1
+            self.cur_mask_ind = len(self.mask_dict[self.cur_indv][self.cur_indv_ind])-1
             self.redraw_all()
         def apply_segmentation(self, coords):
             # actually take the coords and call grabcut
@@ -165,12 +167,14 @@ def main_init(datafolder):
             self.imgax.set_title("Individual %s Image #%d/%d" % (self.cur_indv, self.cur_indv_ind+1, len(self.indv_dict[self.cur_indv])))
             self.imgax.imshow(self.cur_img)
             # we need to open the mask, which is stored as a numpy pickle on the file system
-            self.segax.set_title("Mask #%d on image, draw boxes here" % self.cur_mask_ind)
+            self.segax.set_title("Mask #%d on image, draw boxes here" % self.cur_mask_ind if self.cur_mask_ind != -1 else "Raw image, draw boxes here to start grabCut")
             if len(self.mask_dict[self.cur_indv][self.cur_indv_ind]) == 0 or (self.cur_mask_ind == -1):
                 # if there is no mask, we're going to just display the image on self.segax
                 self.segax.imshow(self.cur_img)
             else:
                 # otherwise we'll apply the mask to the image and show that instead
+                # policy is to open up and set to the latest mask
+                print("Loading segmentation %d" % self.cur_mask_ind)
                 mask = self.open_seg('mask')
                 self.segax.imshow(self.apply_mask(self.cur_img,mask))
             self.fig.canvas.draw()
