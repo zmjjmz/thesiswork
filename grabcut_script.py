@@ -4,11 +4,12 @@ import numpy as np
 import cPickle as pickle
 import cv2
 import matplotlib.pyplot as plt
+import sys
 import glob
 from os.path import join, exists, isdir
 from os import mkdir, remove
 
-from matplotlib.widgets import Button, RectangleSelector
+from matplotlib.widgets import Button, RectangleSelector, RadioButtons
 
 def read_data(folder_root):
     """ Read through folder with format indv/images, collecting images and seg info """
@@ -42,6 +43,7 @@ def main_init(datafolder):
     class IMGUI:
         def __init__(self):
             self.fig = plt.figure(figsize=(15,15))
+            self.region_marker = cv2.GC_BGD
             self.apply_mask = lambda img, mask: img*(np.where((mask==cv2.GC_BGD)|(mask==cv2.GC_PR_BGD),cv2.GC_BGD,cv2.GC_FGD).astype('uint8')[:,:,np.newaxis])
             # state for IMGIndex callbacks
             self.indv_dict, self.mask_dict = read_data(datafolder)
@@ -92,6 +94,11 @@ def main_init(datafolder):
             self.cur_mask_ind = len(self.mask_dict[self.cur_indv][self.cur_indv_ind])-1
             self.redraw_all()
 
+        def change_maskmode(self, label):
+            label_dict = {'Foreground':cv2.GC_FGD,'Background':cv2.GC_BGD}
+            self.region_marker = label_dict[label]
+            print("Marking as %s" % label)
+
         def apply_segmentation(self, coords):
             # actually take the coords and call grabcut
             # we're going to assume that cur_mask_ind points to the previous mask
@@ -100,6 +107,9 @@ def main_init(datafolder):
                 bgd_mod = self.open_seg('bgd')
                 fgd_mod = self.open_seg('fgd')
                 mask = self.open_seg('mask')
+                # so the idea is now we want to take the mask and the region outlined by the coordinates
+                # we want to this in the form lower_y:upper_y,lower_x:upper_x
+                mask[coords[1]:coords[3],coords[0]:coords[2]] = self.region_marker
                 init = cv2.GC_INIT_WITH_MASK
             else:
                 # if not, we'll initialize with rect
@@ -194,7 +204,14 @@ def main_init(datafolder):
                 self.segax.imshow(self.apply_mask(self.cur_img,mask))
             self.fig.canvas.draw()
 
+        def save_figure(self, event):
+            fig_save_dir = "/home/zj1992/work/thesis/example_cuts"
+            plt.savefig(join(fig_save_dir, "%s-%d" % (self.cur_indv, self.cur_indv_ind)))
+            print("Saved view")
 
+        def exit(self, event):
+            print("Exiting")
+            sys.exit(0)
 
 
     cb = IMGUI()
@@ -202,6 +219,11 @@ def main_init(datafolder):
     nextax = cb.fig.add_axes([0.81, 0.05, 0.1, 0.075])
     undoax = cb.fig.add_axes([0.59, 0.05, 0.1, 0.075])
     redoax = cb.fig.add_axes([0.48, 0.05, 0.1, 0.075])
+    saveax = cb.fig.add_axes([0.37, 0.05, 0.1, 0.075])
+    exitax = cb.fig.add_axes([0.15, 0.05, 0.1, 0.075])
+
+    bgfgax = cb.fig.add_axes([0.26,0.05,0.1,0.075])
+
 
     but_next = Button(nextax,'Next')
     but_next.on_clicked(cb.next)
@@ -211,6 +233,16 @@ def main_init(datafolder):
     but_undo.on_clicked(cb.undo_segmentation)
     but_redo = Button(redoax,"Redo\nSegmentation")
     but_redo.on_clicked(cb.redo_segmentation)
+    but_save = Button(saveax,'Save\nView')
+    but_save.on_clicked(cb.save_figure)
+    but_exit = Button(exitax,'Exit')
+    but_exit.on_clicked(cb.exit)
+
+    radio_bgfg = RadioButtons(bgfgax, ['Foreground','Background'], active=1)
+    radio_bgfg.on_clicked(cb.change_maskmode)
+
+
+
 
     rs = RectangleSelector(cb.segax, cb.recv_segmentation, drawtype='box',
             rectprops={'facecolor':'red', 'edgecolor':'black', 'alpha':0.5, 'fill':False})
