@@ -8,8 +8,10 @@ import sys
 import glob
 from os.path import join, exists, isdir
 from os import mkdir, remove
+from itertools import product
 
-from matplotlib.widgets import Button, RectangleSelector, RadioButtons
+from matplotlib.widgets import Button, RectangleSelector, RadioButtons, LassoSelector
+from matplotlib.path import Path
 
 def read_data(folder_root):
     """ Read through folder with format indv/images, collecting images and seg info """
@@ -99,7 +101,7 @@ def main_init(datafolder):
             self.region_marker = label_dict[label]
             print("Marking as %s" % label)
 
-        def apply_segmentation(self, coords):
+        def apply_segmentation(self, coords=None, pix_locs=None):
             # actually take the coords and call grabcut
             # we're going to assume that cur_mask_ind points to the previous mask
             if len(self.mask_dict[self.cur_indv][self.cur_indv_ind]) != 0:
@@ -109,7 +111,11 @@ def main_init(datafolder):
                 mask = self.open_seg('mask')
                 # so the idea is now we want to take the mask and the region outlined by the coordinates
                 # we want to this in the form lower_y:upper_y,lower_x:upper_x
-                mask[coords[1]:coords[3],coords[0]:coords[2]] = self.region_marker
+                if pix_locs is None and not (coords is None):
+                    mask[coords[1]:coords[3],coords[0]:coords[2]] = self.region_marker
+                elif coords is None and not (pix_locs is None):
+                    print(pix_locs)
+                    mask[list(zip(*pix_locs))] = self.region_marker
                 init = cv2.GC_INIT_WITH_MASK
             else:
                 # if not, we'll initialize with rect
@@ -118,6 +124,7 @@ def main_init(datafolder):
                 mask = np.zeros(self.cur_img_shape[:2],np.uint8)
                 init = cv2.GC_INIT_WITH_RECT
             iterations = 2 # TODO: Make this a selector
+            print("SEGMENTING PLEASE WAIT")
             cv2.grabCut(self.cur_img, mask, coords, bgd_mod, fgd_mod, iterations, init)
             # then store the mask, fgd_mod, bgd_mod
             self.cur_mask_ind += 1
@@ -166,9 +173,26 @@ def main_init(datafolder):
                 coords = (int(abs(erelease.xdata)), int(abs(erelease.ydata)), int(abs(eclick.xdata)), int(abs(eclick.ydata)))
             else:
                 coords = (int(abs(eclick.xdata)), int(abs(eclick.ydata)), int(abs(erelease.xdata)), int(abs(erelease.ydata)))
-            print("SEGMENTING PLEASE WAIT")
             self.apply_segmentation(coords)
             self.redraw_all()
+
+        def recv_region(self, vertices):
+            # Make sure the mask_ind is not -1
+            if self.cur_mask_ind == -1:
+                print("Cannot do region selection on initial image")
+                self.redraw_all() # to clear the drawing
+                return
+            # vertices are directly in the image
+            int_vertices = [(int(y),int(x)) for x, y in vertices if ((x > 0 and x < self.cur_img_shape[1]) and (y > 0 and y < self.cur_img_shape[0]))]
+            """
+            path = Path(int_vertices)
+            print("Determining the region")
+            marked_loc = [(y, x) for x, y in product(range(self.cur_img_shape[1]),range(self.cur_img_shape[0])) if (path.contains_point((x,y))
+                and (x > 0 and x < self.cur_img_shape[1]) and (y > 0 and y < self.cur_img_shape[0]))]
+            """
+            self.apply_segmentation(pix_locs=int_vertices)
+            self.redraw_all()
+
 
         def save_segmentation(self, mask, fgd_mod, bgd_mod):
             # take current indices (individual, which image, which segmentation) from global scope and figure out where to store
@@ -245,7 +269,8 @@ def main_init(datafolder):
 
 
     rs = RectangleSelector(cb.segax, cb.recv_segmentation, drawtype='box',
-            rectprops={'facecolor':'red', 'edgecolor':'black', 'alpha':0.5, 'fill':False})
+            rectprops={'facecolor':'red', 'edgecolor':'black', 'alpha':0.5, 'fill':False}, button=3)
+    ls = LassoSelector(cb.segax, onselect=cb.recv_region, useblit=False)
 
     cb.fig.show()
     raw_input()
