@@ -22,3 +22,7 @@ for indv in all_indv:
             print("Removed %s" % seg)
 
 
+
+#for i in `ls`; do a=`echo $i | cut -d'.' -f 1`; convert $a.png -crop 1800x300+150+800 ${a}cr.png; done
+
+
