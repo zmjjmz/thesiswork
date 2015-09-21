@@ -1,3 +1,4 @@
+from __future__ import division
 import cPickle as pickle
 from os.path import join
 import time
@@ -179,6 +180,21 @@ def load_dataset(dataset_path):
     print("Took %0.2f seconds" % toc)
     return dset
 
+def load_identifier_eval(dataset_path):
+    print("Loading %s for identification evaluation" % dataset_path)
+    tic = time.time()
+    dset = {}
+    with open(join(dataset_path, 'idmap.pkl'), 'r') as f:
+        dset['idmap'] = pickle.load(f)
+    with open(join(dataset_path, 'train.indv'), 'r') as f:
+        dset['train'] = pickle.load(f)
+    with open(join(dataset_path, 'val.indv'), 'r') as f:
+        dset['val'] = pickle.load(f)
+    with open(join(dataset_path, 'test.indv'), 'r') as f:
+        dset['test'] = pickle.load(f)
+    return dset
+
+
 def shuffle_dataset(dset):
     # assume dset has X1, X2, y
     X1, X2, y = shuffle(dset['X1'], dset['X2'], dset['y'])
@@ -188,12 +204,48 @@ def shuffle_dataset(dset):
     # TODO this more elegantly
     return dset
 
+def get_patches(individual_list, patchmap):
+    # return a list of all the patches for each individual
+    patches = {patch_type:{'id':[],'data':[]} for patch_type in ['notch','left','right']}
+    for indv in individual_list:
+        for patchset in patchmap[indv]:
+            for patch_type in patchset:
+                patches[patch_type]['id'].append(indv)
+                patches[patch_type]['data'].append(patchset[patch_type])
+
+    return patches
+
+def compute_descriptors(descriptor_func, patches, batch_size=32):
+    # assume patches is organized like it is in get_patches
+    for patch_type in patches:
+        nbatch = len(patches[patch_type]['id']) // batch_size
+        patches[patch_type]['desc'] = []
+        for batch_ind in range(nbatch):
+            batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
+            descriptors = descriptor_func(patches[patch_type]['data'][batch_slice])
+            patches[patch_type]['desc'].append(descriptors)
+        patches[patch_type]['desc'] = list(chain(*patches[patch_type]['desc']))
+
+def identifier(descriptor_func, individual_list, patchmap, batch_size=32):
+    dataset = compute_descriptors(descriptor_func, get_patches(individual_list, patchmap), batchsize=batchsize)
+    # for each image in the individual list
+    # compute their descriptor
+
+
+    # for each image, we'll try and find the corresponding individual naively
+    # essentially for each individual maintain an average distance from the query image
+    # this average distance is just averaged euclidean distance from every database image
+    # corresponding to that individual
+    # then each will be ranked when done (this is naive and won't scale)
+
+
 
 def main(dataset_name, n_epochs):
     original_dataset = load_dataset(join('/home/zj1992/windows/work2/datasets/Flukes/patches',dataset_name))
     all_datasets = dataset_prep(original_dataset)
+    desc_funcs = {}
     for patch_type in all_datasets:
-        patch_func, _ = build_siamese_separate_similarity()
+        patch_func, desc_func = build_siamese_separate_similarity()
         iter_funcs = similarity_iter(patch_func, {})
         for epoch in range(n_epochs):
             tic = time.time()
@@ -204,7 +256,12 @@ def main(dataset_name, n_epochs):
             toc = time.time() - tic
             print(loss)
             print("Took %0.2f seconds" % toc)
-        # TODO do something with the network once this is done
+        desc_funcs[patch_type] = desc_func
+
+    # Evaluate train rank accuracy and val rank accuracy
+    identifier_eval_dataset = load_identifier_eval(join('/home/zj1992/windows/work2/datasets/Flukes/patches',dataset_name))
+
+
 
 if __name__ == '__main__':
     try:
