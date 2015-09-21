@@ -4,6 +4,7 @@ import time
 from sklearn.utils import shuffle
 import sys
 import numpy as np
+from ibeis_cnn.draw_net import imwrite_architecture
 
 import lasagne.layers as ll
 from lasagne.nonlinearities import linear
@@ -11,54 +12,68 @@ from lasagne.updates import adam
 import theano.tensor as T
 import theano
 
-def build_siamese_separate_similarity():
+def build_siamese_separate_similarity(batch_size=32):
     # siamesse model similar to http://nbviewer.ipython.org/gist/ebenolson/40205d53a1a27ed0cc08#
 
     # Build first network
 
-    inp_1 = ll.InputLayer(shape=(None, 3, 128, 128), name='input1')
-    inp_2 = ll.InputLayer(shape=(None, 3, 128, 128), name='input2')
+    inp_1 = ll.InputLayer(shape=(batch_size, 3, 128, 128), name='input1')
+    inp_2 = ll.InputLayer(shape=(batch_size, 3, 128, 128), name='input2')
 
     # keeping it on 'same' for padding and a stride of 1 leaves the output of conv2D the same 2D shape as the input, which is convenient
     # Following Sander's guidelines here https://www.reddit.com/r/MachineLearning/comments/3l5qu7/rules_of_thumb_for_cnn_architectures/cv3ib5q
     # conv2d defaults to Relu with glorot init
-    conv1_1 = ll.Conv2DLayer(inp_1, num_filters=32, filter_size=(3,3), pad='same')
-    conv1_2 = ll.Conv2DLayer(inp_2, num_filters=32, filter_size=(3,3), pad='same', W=conv1_1.W, b=conv1_1.b)
+    conv1_1 = ll.Conv2DLayer(inp_1, num_filters=32, filter_size=(3,3), pad='same', name='conv1_1')
+    conv1_2 = ll.Conv2DLayer(inp_2, num_filters=32, filter_size=(3,3), pad='same', W=conv1_1.W, b=conv1_1.b, name='conv1_2')
 
-    mpool1_1 = ll.Pool2DLayer(conv1_1, pool_size=3, mode='max')
-    mpool1_2 = ll.Pool2DLayer(conv1_2, pool_size=3, mode='max')
+    mpool1_1 = ll.Pool2DLayer(conv1_1, pool_size=3, mode='max', name='mpool1_1')
+    mpool1_2 = ll.Pool2DLayer(conv1_2, pool_size=3, mode='max', name='mpool1_2')
 
-    drop1_1 = ll.DropoutLayer(mpool1_1, p=0.5)
-    drop1_2 = ll.DropoutLayer(mpool1_2, p=0.5)
+    drop1_1 = ll.DropoutLayer(mpool1_1, p=0.5, name='drop1_1')
+    drop1_2 = ll.DropoutLayer(mpool1_2, p=0.5, name='drop1_2')
     # now we're down to 128 / 3 = 42x42 inputs
 
     # 9/20: reducing the amount of filters in conv2 from 64->16 to hopefully deal with some overfitting
     # No bueno, reducing to 8 didn't help either
-    conv2_1 = ll.Conv2DLayer(drop1_1, num_filters=4, filter_size=(3,3), pad='same')
-    conv2_2 = ll.Conv2DLayer(drop1_2, num_filters=4, filter_size=(3,3), pad='same', W=conv2_1.W, b=conv2_1.b)
+    conv2_1 = ll.Conv2DLayer(drop1_1, num_filters=4, filter_size=(3,3), pad='same', name='conv2_1')
+    conv2_2 = ll.Conv2DLayer(drop1_2, num_filters=4, filter_size=(3,3), pad='same', W=conv2_1.W, b=conv2_1.b, name='conv2_2')
 
-    mpool2_1 = ll.Pool2DLayer(conv2_1, pool_size=3, mode='max')
-    mpool2_2 = ll.Pool2DLayer(conv2_2, pool_size=3, mode='max')
+    mpool2_1 = ll.Pool2DLayer(conv2_1, pool_size=3, mode='max', name='mpool2_1')
+    mpool2_2 = ll.Pool2DLayer(conv2_2, pool_size=3, mode='max', name='mpool2_2')
 
-    drop2_1 = ll.DropoutLayer(mpool2_1, p=0.5)
-    drop2_2 = ll.DropoutLayer(mpool2_2, p=0.5)
+    drop2_1 = ll.DropoutLayer(mpool2_1, p=0.5, name='drop2_1')
+    drop2_2 = ll.DropoutLayer(mpool2_2, p=0.5, name='drop2_2')
     # now we're down to 42 / 3 = 14x14 inputs, and 64 of them so we'll have 14x14x16 = 3136 inputs
 
     # for similarity, we'll do a few FC layers before merging
 
-    fc1_1 = ll.DenseLayer(drop2_1, num_units=256)
-    fc1_2 = ll.DenseLayer(drop2_2, num_units=256, W=fc1_1.W, b=fc1_1.b)
+    fc1_1 = ll.DenseLayer(drop2_1, num_units=256, name='fc1_1')
+    fc1_2 = ll.DenseLayer(drop2_2, num_units=256, W=fc1_1.W, b=fc1_1.b, name='fc1_2')
 
 
-    fc2_1 = ll.DenseLayer(fc1_1, num_units=128, nonlinearity=linear)
-    fc2_2 = ll.DenseLayer(fc1_2, num_units=128, nonlinearity=linear, W=fc2_1.W, b=fc2_1.b)
+    fc2_1 = ll.DenseLayer(fc1_1, num_units=128, nonlinearity=linear, name='fc2_1')
+    fc2_2 = ll.DenseLayer(fc1_2, num_units=128, nonlinearity=linear, W=fc2_1.W, b=fc2_1.b, name='fc2_2')
 
-    distance_out = ll.ConcatLayer([fc2_1, fc2_2], axis=1) # 1 now the layer axis, 0 is batch axis, and 2 is feature axis
+    # the incoming is of shape batch_size x 128, and we want it to be batch_size x 1 x 128 so we can concat and make the final output
+    # batch_size x 2 x 128
+    rs1_1 = ll.ReshapeLayer(fc2_1, ([0], 1, [1]))
+    rs1_2 = ll.ReshapeLayer(fc2_2, ([0], 1, [1]))
+
+    distance_out = ll.ConcatLayer([rs1_1, rs1_2], axis=1, name='concat_out') # 1 now the layer axis, 0 is batch axis, and 2 is feature axis
 
     # so for now let's assume that comparing the length 512 descriptor works
 
+    # also return fc2_1 for the 'get_descriptor' function
+    return distance_out, fc2_1
 
-    return distance_out
+def desc_func(desc_layer):
+    X = T.tensor4()
+    all_layers = ll.get_all_layers(desc_layer)
+    imwrite_architecture(all_layers, './desc_function.png')
+
+    descriptor = ll.get_output(desc_layer, X)
+    return theano.function([X], descriptor)
+
 
 def similarity_iter(output_layer, update_params):
     X1 = T.tensor4()
@@ -68,22 +83,29 @@ def similarity_iter(output_layer, update_params):
     # find the input layers
     # TODO this better
     all_layers = ll.get_all_layers(output_layer)
+    # make image of all layers
+    imwrite_architecture(all_layers, './layer_rep.png')
+
     input_1 = filter(lambda x: x.name == 'input1', all_layers)[0]
     input_2 = filter(lambda x: x.name == 'input2', all_layers)[0]
 
-    descriptors = ll.get_output(output_layer, {input_1: X1, input_2: X2})
+    descriptors_train = ll.get_output(output_layer, {input_1: X1, input_2: X2})
+    descriptors_eval = ll.get_output(output_layer, {input_1: X1, input_2: X2}, deterministic=True)
     #descriptor_shape = ll.get_output_shape(output_layer, {input_1: X1, input_2: X2})
     #print("Network output shape: %r" % (descriptor_shape,))
     # distance minimization
-    distance = (descriptors[:,0] - descriptors[:,1]).norm(2, axis=0)
-    print(distance.shape)
-    loss = T.mean(y*distance + (1 - y)*T.maximum(0, 1 - distance))
+    distance = lambda x: (x[:,0,:] - x[:,1,:] + 1e-7).norm(2, axis=1)
+    #distance_eval = (descriptors_eval[:,0,:] - descriptors_eval[:,1,:] + 1e-7).norm(2, axis=1)
+    # 9/21 squaring the loss seems to prevent it from getting to 0.5 really quickly (i.e. w/in 3 epochs)
+    # let's see if it will learn something good
+    loss = lambda x: T.mean(y*(distance(x)**2) + (1 - y)*(T.maximum(0, 1 - distance(x))**2))
+    #loss_eval = T.mean(y*(distance_eval**2) + (1 - y)*(T.maximum(0, 1 - distance_eval)**2))
     all_params = ll.get_all_params(output_layer)
-    updates = adam(loss, all_params, **update_params)
+    updates = adam(loss(descriptors_train), all_params, **update_params)
 
-    train_iter = theano.function([X1, X2, y], loss, updates=updates, allow_input_downcast=True)
-    theano.printing.pydotprint(loss, outfile='./loss_graph.png',var_with_name_simple=True)
-    valid_iter = theano.function([X1, X2, y], loss)
+    train_iter = theano.function([X1, X2, y], loss(descriptors_train), updates=updates)
+    #theano.printing.pydotprint(loss, outfile='./loss_graph.png',var_with_name_simple=True)
+    valid_iter = theano.function([X1, X2, y], loss(descriptors_eval))
 
     return {'train':train_iter, 'valid':valid_iter}
 
@@ -160,10 +182,6 @@ def load_dataset(dataset_path):
 def shuffle_dataset(dset):
     # assume dset has X1, X2, y
     X1, X2, y = shuffle(dset['X1'], dset['X2'], dset['y'])
-    print("Post-shuffle shapes")
-    print(X1.shape)
-    print(X2.shape)
-    print(y.shape)
     dset['X1'] = X1
     dset['X2'] = X2
     dset['y'] = y
@@ -175,8 +193,8 @@ def main(dataset_name, n_epochs):
     original_dataset = load_dataset(join('/home/zj1992/windows/work2/datasets/Flukes/patches',dataset_name))
     all_datasets = dataset_prep(original_dataset)
     for patch_type in all_datasets:
-        network = build_siamese_separate_similarity()
-        iter_funcs = similarity_iter(network, {})
+        patch_func, _ = build_siamese_separate_similarity()
+        iter_funcs = similarity_iter(patch_func, {})
         for epoch in range(n_epochs):
             tic = time.time()
             print("%s: Epoch %d" % (patch_type, epoch))
