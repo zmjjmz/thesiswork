@@ -295,7 +295,9 @@ def print_cdfs(cdfs):
 
 
 def main(dataset_name, n_epochs):
-    original_dataset = load_dataset(join('/home/zj1992/windows/work2/datasets/Flukes/patches',dataset_name))
+    with open('../dataset_loc','r') as f:
+        dataset_loc = f.read().rstrip()
+    original_dataset = load_dataset(join(join(dataset_loc,'Flukes/patches'),dataset_name))
     all_datasets = dataset_prep(original_dataset)
     desc_funcs = {}
     for patch_type in all_datasets:
