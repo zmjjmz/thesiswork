@@ -1,4 +1,6 @@
 from __future__ import division
+from itertools import chain
+
 import cPickle as pickle
 from os.path import join
 import time
@@ -18,8 +20,8 @@ def build_siamese_separate_similarity(batch_size=32):
 
     # Build first network
 
-    inp_1 = ll.InputLayer(shape=(batch_size, 3, 128, 128), name='input1')
-    inp_2 = ll.InputLayer(shape=(batch_size, 3, 128, 128), name='input2')
+    inp_1 = ll.InputLayer(shape=(None, 3, 128, 128), name='input1')
+    inp_2 = ll.InputLayer(shape=(None, 3, 128, 128), name='input2')
 
     # keeping it on 'same' for padding and a stride of 1 leaves the output of conv2D the same 2D shape as the input, which is convenient
     # Following Sander's guidelines here https://www.reddit.com/r/MachineLearning/comments/3l5qu7/rules_of_thumb_for_cnn_architectures/cv3ib5q
@@ -72,7 +74,7 @@ def desc_func(desc_layer):
     all_layers = ll.get_all_layers(desc_layer)
     imwrite_architecture(all_layers, './desc_function.png')
 
-    descriptor = ll.get_output(desc_layer, X)
+    descriptor = ll.get_output(desc_layer, X, deterministic=True)
     return theano.function([X], descriptor)
 
 
@@ -111,9 +113,8 @@ def similarity_iter(output_layer, update_params):
     return {'train':train_iter, 'valid':valid_iter}
 
 def train(iteration_funcs, dataset, batch_size=32):
-    nbatch_train = dataset['train']['y'].shape[0] // batch_size
-    nbatch_valid = dataset['valid']['y'].shape[0] // batch_size
-
+    nbatch_train = (dataset['train']['y'].shape[0] // batch_size)
+    nbatch_valid = (dataset['valid']['y'].shape[0] // batch_size)
     train_losses = []
     for batch_ind in range(nbatch_train):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
@@ -215,29 +216,82 @@ def get_patches(individual_list, patchmap):
 
     return patches
 
-def compute_descriptors(descriptor_func, patches, batch_size=32):
+def compute_descriptors(descriptor_funcs, patches, batch_size=32):
     # assume patches is organized like it is in get_patches
     for patch_type in patches:
-        nbatch = len(patches[patch_type]['id']) // batch_size
+        nbatch = (len(patches[patch_type]['id']) // batch_size) + 1
         patches[patch_type]['desc'] = []
         for batch_ind in range(nbatch):
             batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
-            descriptors = descriptor_func(patches[patch_type]['data'][batch_slice])
+            batch = np.array(patches[patch_type]['data'][batch_slice]).reshape(-1,3,128,128)
+            descriptors = descriptor_funcs[patch_type](batch)
             patches[patch_type]['desc'].append(descriptors)
         patches[patch_type]['desc'] = list(chain(*patches[patch_type]['desc']))
+    return patches
 
-def identifier(descriptor_func, individual_list, patchmap, batch_size=32):
-    dataset = compute_descriptors(descriptor_func, get_patches(individual_list, patchmap), batchsize=batchsize)
-    # for each image in the individual list
-    # compute their descriptor
+def get_distances(query_desc_ind, patchset):
+    # return a dict of all individuals mapped to average descriptor distance
+    # this is returned for each patch type, and also the average across the patch types
+    desc_distances = {'avg':{}}
+    for patch_type in patchset:
+        query_desc = patchset[patch_type]['desc'][query_desc_ind]
+        ids = [id_ for ind, id_ in enumerate(patchset[patch_type]['id']) if ind != query_desc_ind]
+        descs = [desc for ind, desc in enumerate(patchset[patch_type]['desc']) if ind != query_desc_ind]
+        #ids = patchset[patch_type]['id']
+        #descs = patchset[patch_type]['desc']
+        distances = np.linalg.norm(descs - query_desc, axis=1)
+        # compute the average distance for each individual
+        avg_distances = {id_:[] for id_ in ids}
+        for ind, id_ in enumerate(ids):
+            avg_distances[id_].append(distances[ind])
+        for id_ in avg_distances:
+            avg_distances[id_] = np.average(avg_distances[id_])
+        desc_distances[patch_type] = avg_distances
+        for id_ in avg_distances:
+            if id_ in desc_distances['avg']:
+                desc_distances['avg'][id_].append(avg_distances[id_])
+            else:
+                desc_distances['avg'][id_] = [avg_distances[id_]]
+    for id_ in desc_distances['avg']:
+        desc_distances['avg'][id_] = np.average(desc_distances['avg'][id_])
+    return desc_distances
 
+def identifier_eval(descriptor_funcs, individual_list, patchmap, k=5, batch_size=32):
+    dataset = compute_descriptors(descriptor_funcs, get_patches(individual_list, patchmap), batch_size=batch_size)
+    num_desc = len(dataset['notch']['id']) # ok this should be fixed
+    cdfs = [{} for _ in range(k+1)] # the last one being 'not found'
+    for q in range(num_desc):
+        true_id = dataset['notch']['id'][q]
+        id_distances = get_distances(q, dataset)
+        closest_k = {ptype: sorted(id_distances[ptype].keys(),key=lambda x: id_distances[ptype][x])[:k] for ptype in id_distances}
+        for ptype in id_distances:
+            try:
+                rank_loc = closest_k[ptype].index(true_id)
+                for _intopk in range(rank_loc, k):
+                    if ptype in cdfs[_intopk]:
+                        cdfs[_intopk][ptype] += 1
+                    else:
+                        cdfs[_intopk][ptype] = 1
 
-    # for each image, we'll try and find the corresponding individual naively
-    # essentially for each individual maintain an average distance from the query image
-    # this average distance is just averaged euclidean distance from every database image
-    # corresponding to that individual
-    # then each will be ranked when done (this is naive and won't scale)
+            except ValueError:
+                # assume this means the correct id isn't in the top k
+                if ptype in cdfs[-1]:
+                    cdfs[-1][ptype] += 1 # failure case
+                else:
+                    cdfs[-1][ptype] = 1 # failure case
 
+    for i in range(k+1):
+        cdfs[i] = {p:cdfs[i][p] / num_desc for p in cdfs[i]}
+    return cdfs
+
+def print_cdfs(cdfs):
+    for k, cdf in enumerate(cdfs):
+        if k == len(cdfs) - 1:
+            print("Not found in top-%d" % k)
+        else:
+            print("Found in top-%d"  % (k+1))
+        for patch_type in cdf:
+            print("%s : %0.2f" % (patch_type, cdf[patch_type]))
 
 
 def main(dataset_name, n_epochs):
@@ -245,8 +299,8 @@ def main(dataset_name, n_epochs):
     all_datasets = dataset_prep(original_dataset)
     desc_funcs = {}
     for patch_type in all_datasets:
-        patch_func, desc_func = build_siamese_separate_similarity()
-        iter_funcs = similarity_iter(patch_func, {})
+        patch_layer, descriptor_layer = build_siamese_separate_similarity()
+        iter_funcs = similarity_iter(patch_layer, {})
         for epoch in range(n_epochs):
             tic = time.time()
             print("%s: Epoch %d" % (patch_type, epoch))
@@ -256,12 +310,14 @@ def main(dataset_name, n_epochs):
             toc = time.time() - tic
             print(loss)
             print("Took %0.2f seconds" % toc)
-        desc_funcs[patch_type] = desc_func
+        desc_funcs[patch_type] = desc_func(descriptor_layer)
 
     # Evaluate train rank accuracy and val rank accuracy
     identifier_eval_dataset = load_identifier_eval(join('/home/zj1992/windows/work2/datasets/Flukes/patches',dataset_name))
-
-
+    print("Identification performance train:")
+    print_cdfs(identifier_eval(desc_funcs, identifier_eval_dataset['train'], identifier_eval_dataset['idmap']))
+    print("Identification performance valid:")
+    print_cdfs(identifier_eval(desc_funcs, identifier_eval_dataset['val'], identifier_eval_dataset['idmap']))
 
 if __name__ == '__main__':
     try:
