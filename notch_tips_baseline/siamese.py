@@ -13,6 +13,7 @@ import lasagne.layers as ll
 from lasagne.nonlinearities import linear, softmax, sigmoid
 from lasagne.objectives import binary_crossentropy
 from lasagne.updates import adam, nesterov_momentum
+from lasagne.init import Orthogonal
 import theano.tensor as T
 import theano
 
@@ -27,8 +28,8 @@ def build_siamese_separate_similarity(batch_size=32):
     # keeping it on 'same' for padding and a stride of 1 leaves the output of conv2D the same 2D shape as the input, which is convenient
     # Following Sander's guidelines here https://www.reddit.com/r/MachineLearning/comments/3l5qu7/rules_of_thumb_for_cnn_architectures/cv3ib5q
     # conv2d defaults to Relu with glorot init
-    conv1_1 = ll.Conv2DLayer(inp_1, num_filters=16, filter_size=(3,3), pad='same', name='conv1_1')
-    conv1_2 = ll.Conv2DLayer(inp_2, num_filters=16, filter_size=(3,3), pad='same', W=conv1_1.W, b=conv1_1.b, name='conv1_2')
+    conv1_1 = ll.Conv2DLayer(inp_1, num_filters=32, filter_size=(3,3), pad='same', W=Orthogonal(), name='conv1_1')
+    conv1_2 = ll.Conv2DLayer(inp_2, num_filters=32, filter_size=(3,3), pad='same', W=conv1_1.W, b=conv1_1.b, name='conv1_2')
 
     mpool1_1 = ll.Pool2DLayer(conv1_1, pool_size=3, mode='max', name='mpool1_1')
     mpool1_2 = ll.Pool2DLayer(conv1_2, pool_size=3, mode='max', name='mpool1_2')
@@ -39,27 +40,27 @@ def build_siamese_separate_similarity(batch_size=32):
 
     # 9/20: reducing the amount of filters in conv2 from 64->16 to hopefully deal with some overfitting
     # No bueno, reducing to 8 didn't help either
-    conv2_1 = ll.Conv2DLayer(drop1_1, num_filters=8, filter_size=(3,3), pad='same', name='conv2_1')
-    conv2_2 = ll.Conv2DLayer(drop1_2, num_filters=8, filter_size=(3,3), pad='same', W=conv2_1.W, b=conv2_1.b, name='conv2_2')
+    conv2_1 = ll.Conv2DLayer(drop1_1, num_filters=16, filter_size=(3,3), pad='same', W=Orthogonal(), name='conv2_1')
+    conv2_2 = ll.Conv2DLayer(drop1_2, num_filters=16, filter_size=(3,3), pad='same', W=conv2_1.W, b=conv2_1.b, name='conv2_2')
 
     mpool2_1 = ll.Pool2DLayer(conv2_1, pool_size=3, mode='max', name='mpool2_1')
     mpool2_2 = ll.Pool2DLayer(conv2_2, pool_size=3, mode='max', name='mpool2_2')
 
     drop2_1 = ll.DropoutLayer(mpool2_1, p=0, name='drop2_1')
     drop2_2 = ll.DropoutLayer(mpool2_2, p=0, name='drop2_2')
-    # now we're down to 42 / 3 = 14x14 inputs, and 64 of them so we'll have 14x14x16 = 3136 inputs
+    # now we're down to 42 / 3 = 14x14 inputs, and 16 of them so we'll have 14x14x16 = 3136 inputs
 
     # for similarity, we'll do a few FC layers before merging
 
-    fc1_1 = ll.DenseLayer(drop2_1, num_units=256, name='fc1_1')
-    fc1_2 = ll.DenseLayer(drop2_2, num_units=256, W=fc1_1.W, b=fc1_1.b, name='fc1_2')
+    fc1_1 = ll.DenseLayer(drop2_1, num_units=512, name='fc1_1')
+    fc1_2 = ll.DenseLayer(drop2_2, num_units=512, W=fc1_1.W, b=fc1_1.b, name='fc1_2')
 
     drop3_1 = ll.DropoutLayer(fc1_1, p=0.5, name='drop3_1')
     drop3_2 = ll.DropoutLayer(fc1_2, p=0.5, name='drop3_2')
 
 
-    fc2_1 = ll.DenseLayer(drop3_1, num_units=128, nonlinearity=linear, name='fc2_1')
-    fc2_2 = ll.DenseLayer(drop3_2, num_units=128, nonlinearity=linear, W=fc2_1.W, b=fc2_1.b, name='fc2_2')
+    fc2_1 = ll.DenseLayer(drop3_1, num_units=256, nonlinearity=linear, name='fc2_1')
+    fc2_2 = ll.DenseLayer(drop3_2, num_units=256, nonlinearity=linear, W=fc2_1.W, b=fc2_1.b, name='fc2_2')
 
     # the incoming is of shape batch_size x 128, and we want it to be batch_size x 1 x 128 so we can concat and make the final output
     # batch_size x 2 x 128
@@ -73,7 +74,7 @@ def build_siamese_separate_similarity(batch_size=32):
 
     classifier_dp1 = ll.DropoutLayer(classifier_in, p=0.5, name='classifier_dp1')
     classifier_fc1 = ll.DenseLayer(classifier_dp1, num_units=128, name='classifier_fc1')
-    sigmoid_out = ll.DenseLayer(classifier_fc1, num_units=1, nonlinearity=sigmoid, name='classifier_out')
+    sigmoid_out = ll.DenseLayer(classifier_in, num_units=1, nonlinearity=sigmoid, name='classifier_out')
 
 
     # also return fc2_1 for the 'get_descriptor' function
@@ -111,29 +112,43 @@ def similarity_iter(output_layer, match_layer, update_params, match_layer_w=0):
     # 9/21 squaring the loss seems to prevent it from getting to 0.5 really quickly (i.e. w/in 3 epochs)
     # let's see if it will learn something good
     loss = lambda x, z: (1-match_layer_w)*T.mean(y*(distance(x)) + (1 - y)*(T.maximum(0, 1 - distance(x)))) + match_layer_w*T.mean(binary_crossentropy(z.T + 1e-7,y))
+    jason_loss = lambda x, z: T.mean(distance(x)*y + (1-y)*binary_crossentropy(z.T + 1e-7,y))
     #loss_eval = T.mean(y*(distance_eval**2) + (1 - y)*(T.maximum(0, 1 - distance_eval)**2))
     all_params = ll.get_all_params(match_layer) # unsure how I would do this if there were truly two trainable branches...
+    loss_train = loss(descriptors_train, match_prob_train)
+    loss_train.name = 'combined_loss' # for the names
     #updates = adam(loss(descriptors_train, match_prob_train), all_params, **update_params)
-    updates = nesterov_momentum(loss(descriptors_train, match_prob_train), all_params, **update_params)
+    grads = T.grad(loss_train, all_params, add_names=True)
+    updates = nesterov_momentum(grads, all_params, **update_params)
 
-    train_iter = theano.function([X1, X2, y], loss(descriptors_train, match_prob_train), updates=updates)
+    train_iter = theano.function([X1, X2, y], [loss(descriptors_train, match_prob_train)] + grads, updates=updates)
     #theano.printing.pydotprint(loss, outfile='./loss_graph.png',var_with_name_simple=True)
     valid_iter = theano.function([X1, X2, y], loss(descriptors_eval, match_prob_eval))
 
-    return {'train':train_iter, 'valid':valid_iter}
+    return {'train':train_iter, 'valid':valid_iter, 'gradnames':[g.name for g in grads]}
 
 def train(iteration_funcs, dataset, batch_size=32):
     nbatch_train = (dataset['train']['y'].shape[0] // batch_size)
     nbatch_valid = (dataset['valid']['y'].shape[0] // batch_size)
     train_losses = []
+    grad_mags = []
+    grad_means = []
     for batch_ind in range(nbatch_train):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
         # this takes care of the updates as well
-        batch_train_loss = iteration_funcs['train'](dataset['train']['X1'][batch_slice],
+        bloss_grads = iteration_funcs['train'](dataset['train']['X1'][batch_slice],
                                                     dataset['train']['X2'][batch_slice],
                                                     dataset['train']['y'][batch_slice])
+        batch_train_loss = bloss_grads.pop(0)
+        grad_mags.append([np.linalg.norm(grad) for grad in bloss_grads])
+        grad_means.append([np.mean(np.abs(grad)) for grad in bloss_grads])
         train_losses.append(batch_train_loss)
 
+    avg_grad_mags = np.mean(np.array(grad_mags),axis=0)
+    avg_grad_means = np.mean(np.array(grad_means),axis=0)
+    print("Gradient names:\t%s" % iteration_funcs['gradnames'])
+    print("Gradient magnitudes:\t%s" % avg_grad_mags)
+    print("Gradient means:\t%s" % avg_grad_means)
     avg_train_loss = np.mean(train_losses)
 
     valid_losses = []
@@ -147,7 +162,7 @@ def train(iteration_funcs, dataset, batch_size=32):
 
     avg_valid_loss = np.mean(valid_losses)
 
-    return {'train_loss':avg_train_loss,'valid_loss':avg_valid_loss}
+    return {'train_loss':avg_train_loss,'valid_loss':avg_valid_loss,'all_train_loss':train_losses}
 
 
 def dataset_prep(original_dataset):
@@ -278,7 +293,6 @@ def get_distances(query_desc_ind, patchset):
         #ids = patchset[patch_type]['id']
         #descs = patchset[patch_type]['desc']
         distances = np.linalg.norm(descs - query_desc, axis=1)
-        # count how many times the distance is 0. It should be once right?
         # compute the average distance for each individual
         avg_distances = {id_:[] for id_ in ids}
         for ind, id_ in enumerate(ids):
@@ -364,27 +378,48 @@ def parameter_analysis(layer):
         print("Number of negative weights: %0.2f" % nneg_w)
         print("Weight norm (normalized by size): %0.10f" % normed_norm)
 
+def display_losses(losses, n_epochs, batch_size, train_size, fn='losses.png'):
+    import matplotlib.pyplot as plt
+    f, axarr = plt.subplots(3)
+    batches_per_epoch = train_size // batch_size
+    for ind, patch_type in enumerate(losses.keys()):
+        axarr[ind].scatter(range(n_epochs*batches_per_epoch), losses[patch_type]['batch'], color='g')
+        axarr[ind].scatter([i*batches_per_epoch for i in range(n_epochs)], losses[patch_type]['epoch'], color='r', s=10.)
+        axarr[ind].set_title(patch_type)
+    plt.savefig(fn)
+
+
 def main(dataset_name, n_epochs):
     with open('../dataset_loc','r') as f:
         dataset_loc = f.read().rstrip()
-    original_dataset = load_dataset(join(join(dataset_loc,'Flukes/patches'),dataset_name))
-    all_datasets = dataset_prep(original_dataset)
+    all_datasets = dataset_prep(load_dataset(join(join(dataset_loc,'Flukes/patches'),dataset_name)))
+    batch_size = 1
     desc_funcs = {}
+    losses = {}
     for patch_type in all_datasets:
+        epoch_losses = []
+        batch_losses = []
         patch_layer, descriptor_layer, match_layer = build_siamese_separate_similarity()
-        iter_funcs = similarity_iter(patch_layer, match_layer, {'learning_rate':1e-5}, match_layer_w=0.5)
+        iter_funcs = similarity_iter(patch_layer, match_layer, {'learning_rate':1e-2}, match_layer_w=0.5)
         for epoch in range(n_epochs):
             tic = time.time()
             print("%s: Epoch %d" % (patch_type, epoch))
-            loss = train(iter_funcs, all_datasets[patch_type])
+            loss = train(iter_funcs, all_datasets[patch_type], batch_size=batch_size)
+            epoch_losses.append(loss['train_loss'])
+            batch_losses.append(loss['all_train_loss'])
             # shuffle training set
             all_datasets[patch_type]['train'] = shuffle_dataset(all_datasets[patch_type]['train'])
             toc = time.time() - tic
-            print(loss)
+            print("Train loss: %0.3f\nValid loss: %0.3f" % (loss['train_loss'],loss['valid_loss']))
             print("Took %0.2f seconds" % toc)
+        batch_losses = list(chain(*batch_losses))
+        losses[patch_type] = {}
+        losses[patch_type]['batch'] = batch_losses
+        losses[patch_type]['epoch'] = epoch_losses
         print(patch_type)
         parameter_analysis(match_layer)
         desc_funcs[patch_type] = desc_func(descriptor_layer)
+    display_losses(losses, n_epochs, batch_size, all_datasets['notch']['train']['X1'].shape[0])
 
     # Evaluate train rank accuracy and val rank accuracy
     identifier_eval_dataset = load_identifier_eval(join(join(dataset_loc,'Flukes/patches'),dataset_name))
