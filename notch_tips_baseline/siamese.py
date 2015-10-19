@@ -40,18 +40,18 @@ def build_siamese_separate_similarity(batch_size=32):
 
 
     # learning pose normalization might help maybe?
-    identW, identb = make_identity_transform()
-    loc1_1 = ll.DenseLayer(inp_1, num_units=6, W=identW, b=identb, nonlinearity=linear, name='loc1_1')
-    loc1_2 = ll.DenseLayer(inp_2, num_units=6, W=loc1_1.W, b=loc1_1.b, nonlinearity=linear, name='loc1_2')
+    #identW, identb = make_identity_transform()
+    #loc1_1 = ll.DenseLayer(inp_1, num_units=6, W=identW, b=identb, nonlinearity=linear, name='loc1_1')
+    #loc1_2 = ll.DenseLayer(inp_2, num_units=6, W=loc1_1.W, b=loc1_1.b, nonlinearity=linear, name='loc1_2')
 
-    st1_1 = ll.TransformerLayer(inp_1, loc1_1, name='st1_1')
-    st1_2 = ll.TransformerLayer(inp_2, loc1_2, name='st1_2')
+    #st1_1 = ll.TransformerLayer(inp_1, loc1_1, name='st1_1')
+    #st1_2 = ll.TransformerLayer(inp_2, loc1_2, name='st1_2')
 
     # keeping it on 'same' for padding and a stride of 1 leaves the output of conv2D the same 2D shape as the input, which is convenient
     # Following Sander's guidelines here https://www.reddit.com/r/MachineLearning/comments/3l5qu7/rules_of_thumb_for_cnn_architectures/cv3ib5q
     # conv2d defaults to Relu with glorot init
-    conv1_1 = ll.Conv2DLayer(st1_1, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), name='conv1_1')
-    conv1_2 = ll.Conv2DLayer(st1_2, num_filters=128, filter_size=(3,3), pad='same', W=conv1_1.W, b=conv1_1.b, name='conv1_2')
+    conv1_1 = ll.Conv2DLayer(inp_1, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), name='conv1_1')
+    conv1_2 = ll.Conv2DLayer(inp_2, num_filters=128, filter_size=(3,3), pad='same', W=conv1_1.W, b=conv1_1.b, name='conv1_2')
 
     mpool1_1 = ll.Pool2DLayer(conv1_1, pool_size=3, mode='max', name='mpool1_1')
     mpool1_2 = ll.Pool2DLayer(conv1_2, pool_size=3, mode='max', name='mpool1_2')
@@ -90,11 +90,11 @@ def build_siamese_separate_similarity(batch_size=32):
     drop3_2 = ll.DropoutLayer(fc1_2, p=0.5, name='drop3_2')
 
 
-    fc2_1 = ll.DenseLayer(drop3_1, num_units=256, nonlinearity=linear, name='fc2_1')
-    fc2_2 = ll.DenseLayer(drop3_2, num_units=256, nonlinearity=linear, W=fc2_1.W, b=fc2_1.b, name='fc2_2')
+    desc_1 = ll.DenseLayer(drop3_1, num_units=256, nonlinearity=linear, name='desc_1')
+    desc_2 = ll.DenseLayer(drop3_2, num_units=256, nonlinearity=linear, W=desc_1.W, b=desc_1.b, name='desc_2')
 
-    desc_1 = ResponseNormalizationLayer(fc2_1, name='norm_1')
-    desc_2 = ResponseNormalizationLayer(fc2_2, name='norm_2')
+    #desc_1 = ResponseNormalizationLayer(fc2_1, name='norm_1')
+    #desc_2 = ResponseNormalizationLayer(fc2_2, name='norm_2')
 
     # the incoming is of shape batch_size x 128, and we want it to be batch_size x 1 x 128 so we can concat and make the final output
     # batch_size x 2 x 128
@@ -138,7 +138,7 @@ def similarity_iter(output_layer, match_layer, update_params, match_layer_w=0):
     # 9/21 squaring the loss seems to prevent it from getting to 0.5 really quickly (i.e. w/in 3 epochs)
     # let's see if it will learn something good
     margin = 1
-    decay = 1e-3
+    decay = 0
     reg = regularize_network_params(match_layer, l2) * decay
     loss = lambda x, z: ((1-match_layer_w)*T.mean(y*(distance(x)) + (1 - y)*(T.maximum(0, margin - distance(x))))/2 # constrastive loss
             + match_layer_w*T.mean(binary_crossentropy(z.T + 1e-7,y))) # matching loss
@@ -204,7 +204,7 @@ def compute_descriptors(descriptor_funcs, patches, batch_size=32):
         patches[patch_type]['desc'] = []
         for batch_ind in range(nbatch):
             batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
-            batch = np.array(patches[patch_type]['data'][batch_slice],dtype='float32').reshape(-1,3,128,128)
+            batch = np.array(patches[patch_type]['data'][batch_slice],dtype='float32').swapaxes(1,3)
             descriptors = descriptor_funcs[patch_type](batch)
             patches[patch_type]['desc'].append(descriptors)
         patches[patch_type]['desc'] = list(chain(*patches[patch_type]['desc']))
@@ -337,7 +337,7 @@ def main(dataset_name, n_epochs):
         epoch_losses = []
         batch_losses = []
         patch_layer, descriptor_layer, match_layer = build_siamese_separate_similarity()
-        iter_funcs = similarity_iter(patch_layer, match_layer, {'learning_rate':1e-2}, match_layer_w=0.5)
+        iter_funcs = similarity_iter(patch_layer, match_layer, {'learning_rate':1e-2}, match_layer_w=0.)
         for epoch in range(n_epochs):
             tic = time.time()
             print("%s: Epoch %d" % (patch_type, epoch))
@@ -345,7 +345,7 @@ def main(dataset_name, n_epochs):
             epoch_losses.append(loss['train_loss'])
             batch_losses.append(loss['all_train_loss'])
             # shuffle training set
-            #all_datasets[patch_type]['train'] = shuffle_dataset(all_datasets[patch_type]['train'])
+            all_datasets[patch_type]['train'] = shuffle_dataset(all_datasets[patch_type]['train'])
             toc = time.time() - tic
             print("Train loss (reg): %0.3f\nTrain loss: %0.3f\nValid loss: %0.3f" %
                     (loss['train_reg_loss'],loss['train_loss'],loss['valid_loss']))

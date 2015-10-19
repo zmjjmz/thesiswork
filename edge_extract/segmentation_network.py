@@ -5,12 +5,13 @@ from functools import partial
 import random
 
 import cPickle as pickle
-from os.path import join
+from os.path import join, exists
 import time
 from sklearn.utils import shuffle
 import sys
 import numpy as np
 from ibeis_cnn.draw_net import imwrite_architecture
+from optparse import OptionParser
 
 import lasagne.layers as ll
 from lasagne.nonlinearities import linear, softmax, sigmoid, rectify
@@ -87,7 +88,7 @@ def loss_iter(segmenter, update_params={}):
     all_params = ll.get_all_params(segmenter)
     grads = T.grad(loss_train, all_params, add_names=True)
     #updates = adam(grads, all_params, **update_params)
-    updates = nesterov_momentum(grads, all_params, **update_params)
+    updates = adam(grads, all_params, **update_params)
 
     print("Compiling network for training")
     tic = time.time()
@@ -128,7 +129,14 @@ def preproc_dataset(dataset):
     return shuffle_dataset({'X':patches, 'y':labels, 'pixelw':pixel_weights})
 
 if __name__ == "__main__":
-    if sys.argv[1] == "test":
+    parser = OptionParser()
+    parser.add_option("-t", "--test", action='store_true', dest='test')
+    parser.add_option("-r", "--resume", action='store_true', dest='resume')
+    parser.add_option("-d", "--dataset", action='store', type='string', dest='dataset')
+    parser.add_option("-b", "--batch_size", action="store", type="int", dest='batch_size')
+    parser.add_option("-e", "--epochs", action="store", type="int", dest="n_epochs")
+    options, args = parser.parse_args()
+    if options.test:
         test_data = np.zeros((1,3,32,32), dtype='float32')
         test_data += np.random.rand(1, 3, 32, 32)
         test_y = np.zeros((1,3,32,32),dtype='float32')
@@ -142,12 +150,9 @@ if __name__ == "__main__":
         output = loss.eval({X:test_data, y:test_y})
         print(output)
         sys.exit(0)
-    if len(sys.argv) != 4:
-        print("Usage: %s dataset_loc n_epochs batch_size" % sys.argv[0])
-        sys.exit(1)
-    dset_name = sys.argv[1]
-    n_epochs = int(sys.argv[2])
-    batch_size = int(sys.argv[3])
+    dset_name = options.dataset
+    n_epochs = options.n_epochs
+    batch_size = options.batch_size
     print("Loading dataset")
     tic = time.time()
     dset = load_dataset(join(dataset_loc, "Flukes/patches/%s" % dset_name))
@@ -156,7 +161,15 @@ if __name__ == "__main__":
     epoch_losses = []
     batch_losses = []
     segmenter = build_segmenter()
-    iter_funcs = loss_iter(segmenter, update_params={'learning_rate':.01})
+    model_path = join(dataset_loc, "Flukes/patches/%s/model.pkl" % dset_name)
+    if options.resume and exists(model_path):
+        with open(model_path, 'r') as f:
+            params = pickle.load(f)
+        ll.set_all_param_values(segmenter, params)
+    #iter_funcs = loss_iter(segmenter, update_params={'learning_rate':.01})
+    iter_funcs = loss_iter(segmenter, update_params={})
+    best_params = ll.get_all_param_values(segmenter)
+    best_val_loss = np.inf
     for epoch in range(n_epochs):
         tic = time.time()
         print("Epoch %d" % (epoch))
@@ -168,6 +181,10 @@ if __name__ == "__main__":
         toc = time.time() - tic
         print("Train loss (reg): %0.3f\nTrain loss: %0.3f\nValid loss: %0.3f" %
                 (loss['train_reg_loss'],loss['train_loss'],loss['valid_loss']))
+        if loss['valid_loss'] < best_val_loss:
+            best_params = ll.get_all_param_values(segmenter)
+            best_val_loss = loss['valid_loss']
+            print("New best validation loss!")
         print("Took %0.2f seconds" % toc)
     batch_losses = list(chain(*batch_losses))
     losses = {}
@@ -176,10 +193,9 @@ if __name__ == "__main__":
     parameter_analysis(segmenter)
     display_losses(losses, n_epochs, batch_size, dset['train']['X'].shape[0])
 
-    params_to_save = ll.get_all_param_values(segmenter)
     # TODO: move to train_utils and add way to load up previous model
     with open(join(dataset_loc, "Flukes/patches/%s/model.pkl" % dset_name), 'w') as f:
-        pickle.dump(params_to_save, f)
+        pickle.dump(best_params, f)
 
 
 
