@@ -14,6 +14,7 @@ from lasagne.init import Constant
 import numpy as np
 import time
 from sklearn.utils import shuffle
+import scipy.sparse as ss
 
 with open('../dataset_loc','r') as f:
     dataset_loc = f.read().rstrip()
@@ -43,13 +44,17 @@ def desc_func(desc_layer, save_diagram=True):
     descriptor = ll.get_output(desc_layer, X, deterministic=True)
     return tfunc([X], descriptor)
 
+def normalize_patch(patch, mean=128, std=255):
+    return (patch - mean) / (std)
+
+
 def normalize_patches(patchset):
     new_patchset = {}
     for patch in patchset:
         # zscore normalize
         #new_patchset[patch] = (patchset[patch] - np.mean(patchset[patch],axis=(0,1))) / np.std(patchset[patch],axis=(0,1))
         # assume that our dataset-wide avg is 128, and the std is 255
-        new_patchset[patch] = (patchset[patch] - 128) / 255.
+        new_patchset[patch] = normalize_patch(patchset[patch])
     return new_patchset
 
 def normalize_image_pairs(img_pairlist):
@@ -66,6 +71,26 @@ def normalize_image_idmap(idmap):
         for img in idmap[indv]:
             new_idmap[indv].append(normalize_patches(img))
     return new_idmap
+
+def sparsify(data, threshold=0.6):
+    if np.count_nonzero(data) / float(data.flatten().shape[0]) > threshold:
+        original_shape = data.shape
+        if len(data.shape) > 2:
+            # ugh
+            data = data.flatten()
+        return (ss.coo_matrix(data), original_shape)
+    else:
+        return data
+
+def desparsify(data):
+    if isinstance(data, tuple):
+        # this is definitely sparse in the very limited case that this code is meant to be used
+        original_shape = data[1]
+        datum = data[0]
+        return datum.todense().reshape(original_shape)
+    else:
+        return data
+
 
 def load_dataset(dataset_path):
     print("Loading %s" % dataset_path)
@@ -116,12 +141,12 @@ def load_identifier_eval(dataset_path):
     return dset
 
 def shuffle_dataset(dset):
-    # assume dset has X1, X2, y
+    # assume dset has X, y, pixelw
     new_dset = {}
-    X1, X2, y = shuffle(dset['X1'], dset['X2'], dset['y'])
-    new_dset['X1'] = X1
-    new_dset['X2'] = X2
+    X, y, pixelw = shuffle(dset['X'], dset['y'], dset['pixelw'])
+    new_dset['X'] = X
     new_dset['y'] = y
+    new_dset['pixelw'] = pixelw
     # TODO this more elegantly
     return new_dset
 
@@ -148,9 +173,9 @@ def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x:
     for batch_ind in range(nbatch_train):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
         # this takes care of the updates as well
-        bloss_grads = iteration_funcs['train'](batch_loader(dataset['train']['X1'][batch_slice]),
-                                               batch_loader(dataset['train']['X2'][batch_slice]),
-                                               dataset['train']['y'][batch_slice])
+        bloss_grads = iteration_funcs['train'](batch_loader(dataset['train']['X'][batch_slice]),
+                                               dataset['train']['y'][batch_slice],
+                                               dataset['train']['pixelw'][batch_slice])
         batch_train_loss_reg = bloss_grads.pop(0)
         batch_train_loss = bloss_grads.pop(0)
         grad_mags.append([np.linalg.norm(grad) for grad in bloss_grads])
@@ -170,9 +195,9 @@ def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x:
     for batch_ind in range(nbatch_valid):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
         # this takes care of the updates as well
-        batch_valid_loss = iteration_funcs['valid'](batch_loader(dataset['valid']['X1'][batch_slice]),
-                                                    batch_loader(dataset['valid']['X2'][batch_slice]),
-                                                    dataset['valid']['y'][batch_slice])
+        batch_valid_loss = iteration_funcs['valid'](batch_loader(dataset['valid']['X'][batch_slice]),
+                                                    dataset['valid']['y'][batch_slice],
+                                                    dataset['valid']['pixelw'][batch_slice])
         valid_losses.append(batch_valid_loss)
 
     avg_valid_loss = np.mean(valid_losses)
@@ -182,10 +207,13 @@ def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x:
             'valid_loss':avg_valid_loss,
             'all_train_loss':train_losses}
 
-def load_whole_image(imgs_dir, img, img_shape):
+def load_whole_image(imgs_dir, img, img_shape=None):
     # imgs_dir should be the absolute path
     # loads the image and naively resizes to img_shape
-    return cv2.resize(cv2.imread(join(imgs_dir, img)), img_shape[::-1])
+    if img_shape is not None:
+        return cv2.resize(cv2.imread(join(imgs_dir, img)), img_shape[::-1])
+    else:
+        return cv2.imread(join(imgs_dir, img))
 
 def parameter_analysis(layer):
     all_params = ll.get_all_param_values(layer, regularizable=True)
@@ -195,5 +223,13 @@ def parameter_analysis(layer):
         normed_norm = np.linalg.norm(param) / np.product(param.shape)
         print("Number of negative weights: %0.2f" % nneg_w)
         print("Weight norm (normalized by size): %0.10f" % normed_norm)
+
+def display_losses(losses, n_epochs, batch_size, train_size, fn='losses.png'):
+    import matplotlib.pyplot as plt
+    ax = plt.subplot()
+    batches_per_epoch = train_size // batch_size
+    ax.scatter(range(n_epochs*batches_per_epoch), losses['batch'], color='g')
+    ax.scatter([i*batches_per_epoch for i in range(n_epochs)], losses['epoch'], color='r', s=10.)
+    plt.savefig(fn)
 
 

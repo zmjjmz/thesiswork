@@ -180,8 +180,8 @@ def dataset_prep(original_dataset):
                 patch_dataset[patch_type][subset]['y'].append(is_match)
     for patch_type in patch_dataset:
         for subset in patch_dataset[patch_type]:
-            patch_dataset[patch_type][subset]['X1'] = np.array(patch_dataset[patch_type][subset]['X1'],dtype=np.float32).reshape(-1,3,128,128)
-            patch_dataset[patch_type][subset]['X2'] = np.array(patch_dataset[patch_type][subset]['X2'],dtype=np.float32).reshape(-1,3,128,128)
+            patch_dataset[patch_type][subset]['X1'] = np.array(patch_dataset[patch_type][subset]['X1'],dtype=np.float32).swapaxes(1,3)
+            patch_dataset[patch_type][subset]['X2'] = np.array(patch_dataset[patch_type][subset]['X2'],dtype=np.float32).swapaxes(1,3)
             patch_dataset[patch_type][subset]['y'] = np.array(patch_dataset[patch_type][subset]['y'], dtype=np.int32)
             #print(["%s : %s : %s" % (patch_type, subset, patch_dataset[patch_type][subset][sec].shape[0]) for sec in ['X1','X2','y']])
     return patch_dataset
