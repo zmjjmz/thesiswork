@@ -17,10 +17,16 @@ with open(join(dataset_loc, "Flukes/zooniverse_curvatures_winteg.pkl"), 'r') as 
 
 lib = ctypes.cdll.LoadLibrary('./icp_ctypes_cpp/ctypes_icp.so')
 dtw_dist = lib.dtw_windowed
+dtw_scalar = lib.dtw_scalar
 #dtw_dist.restype = ctypes.c_float
+
+#fastdtw_wrapper = ctypes.cdll.LoadLibrary('./icp_ctypes_cpp/fastdtw_wrapper.so')
+#fastdtw_cpp = fastdtw_wrapper.dtw_windowed
+#fastdtw_cpp.restype = ctypes.c_float
 
 niter = 10
 cpptotoc = 0
+cpp_sctotoc = 0
 fdtw_totoc = 0
 for i in range(niter):
     # choose two random curvatures
@@ -43,7 +49,7 @@ for i in range(niter):
 
 
     cpptic = time.time()
-    distance = dtw_dist(
+    dtw_dist(
                         #ctypes.c_void_p(seq1pos.ctypes.data), ctypes.c_void_p(seq2pos.ctypes.data),
                         ctypes.c_void_p(seq1curv.ctypes.data), ctypes.c_void_p(seq2curv.ctypes.data),
                         ctypes.c_int(seq1_len), ctypes.c_int(seq2_len), ctypes.c_int(10),
@@ -51,14 +57,40 @@ for i in range(niter):
     print(distance_mat[-1])
     cpptotoc += time.time() - cpptic
 
-    # now let's try this with fastdtw
-    #fdtwtic = time.time()
-    #fastdtw_dist = fastdtw(curvature1['int_curv'][5], curvature2['int_curv'][5], radius=20, dist=lambda a, b: euclidean(a,b))[0]
-    #print(fastdtw_dist)
-    #kfdtw_totoc += time.time() - fdtwtic
+    cpp_sctic = time.time()
+    # circle area
+    seq1_sc = np.array(curvature1['int_curv'][5],dtype=np.float32)[:,0].flatten()# + 1e-7
+    seq2_sc = np.array(curvature2['int_curv'][5],dtype=np.float32)[:,0].flatten()# + 1e-7
+
+    distance_mat_sc = (np.zeros((seq1_len, seq2_len), dtype=np.float32) + np.inf).flatten()
+    distance_mat_sc[0] = 0
+    dtw_scalar(
+                        #ctypes.c_void_p(seq1pos.ctypes.data), ctypes.c_void_p(seq2pos.ctypes.data),
+                        ctypes.c_void_p(seq1_sc.ctypes.data), ctypes.c_void_p(seq2_sc.ctypes.data),
+                        ctypes.c_int(seq1_len), ctypes.c_int(seq2_len),
+                        ctypes.c_void_p(distance_mat_sc.ctypes.data))
+    print(distance_mat_sc[-1])
+    cpp_sctotoc += time.time() - cpp_sctic
+
+
+    """
+    fastdtw_distance = fastdtw_cpp(
+                        #ctypes.c_void_p(seq1pos.ctypes.data), ctypes.c_void_p(seq2pos.ctypes.data),
+                        ctypes.c_void_p(seq1curv.ctypes.data), ctypes.c_void_p(seq2curv.ctypes.data),
+                        ctypes.c_int(seq1_len), ctypes.c_int(seq2_len), ctypes.c_int(20))
+    """
+    """
+    fdtwtic = time.time()
+
+    fastdtw_dist = fastdtw(np.array(curvature1['int_curv'][5],dtype=np.float32), np.array(curvature2['int_curv'][5],dtype=np.float32),
+                           radius=15, dist=lambda a, b: euclidean(a,b))[0]
+    print(fastdtw_dist)
+    fdtw_totoc += time.time() - fdtwtic
+    """
 
 cpptotoc /= niter
-#fdtw_totoc /= niter
+fdtw_totoc /= niter
+cpp_sctotoc /= niter
 print("C++ DTW Took %0.5f seconds on average over %d loops" % (cpptotoc, niter))
 #print("Python FastDTW Took %0.5f seconds on average over %d loops" % (fdtw_totoc, niter))
-
+print("C++ Scalar DTW Took %0.5f seconds on average over %d loops" % (cpp_sctotoc, niter))

@@ -168,6 +168,10 @@ def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x:
     nbatch_valid = (dataset['valid']['y'].shape[0] // batch_size)
     train_losses = []
     train_reg_losses = []
+
+    train_accs = []
+    valid_accs = []
+
     grad_mags = []
     grad_means = []
     for batch_ind in range(nbatch_train):
@@ -178,10 +182,12 @@ def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x:
                                                dataset['train']['pixelw'][batch_slice])
         batch_train_loss_reg = bloss_grads.pop(0)
         batch_train_loss = bloss_grads.pop(0)
+        batch_train_acc = bloss_grads.pop(0)
         grad_mags.append([np.linalg.norm(grad) for grad in bloss_grads])
         grad_means.append([np.mean(np.abs(grad)) for grad in bloss_grads])
         train_reg_losses.append(batch_train_loss_reg)
         train_losses.append(batch_train_loss)
+        train_accs.append(batch_train_acc)
 
     avg_grad_mags = np.mean(np.array(grad_mags),axis=0)
     avg_grad_means = np.mean(np.array(grad_means),axis=0)
@@ -190,21 +196,26 @@ def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x:
     print("Gradient means:\t%s" % avg_grad_means)
     avg_train_loss = np.mean(train_losses)
     avg_train_reg_loss = np.mean(train_reg_losses)
+    avg_train_acc = np.mean(train_accs)
 
     valid_losses = []
     for batch_ind in range(nbatch_valid):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
         # this takes care of the updates as well
-        batch_valid_loss = iteration_funcs['valid'](batch_loader(dataset['valid']['X'][batch_slice]),
+        batch_valid_loss, batch_valid_acc = iteration_funcs['valid'](batch_loader(dataset['valid']['X'][batch_slice]),
                                                     dataset['valid']['y'][batch_slice],
                                                     dataset['valid']['pixelw'][batch_slice])
         valid_losses.append(batch_valid_loss)
+        valid_accs.append(batch_valid_acc)
 
     avg_valid_loss = np.mean(valid_losses)
+    avg_valid_acc = np.mean(valid_accs)
 
     return {'train_loss':avg_train_loss,
             'train_reg_loss':avg_train_reg_loss,
             'valid_loss':avg_valid_loss,
+            'train_acc':avg_train_acc,
+            'valid_acc':avg_valid_acc,
             'all_train_loss':train_losses}
 
 def load_whole_image(imgs_dir, img, img_shape=None):

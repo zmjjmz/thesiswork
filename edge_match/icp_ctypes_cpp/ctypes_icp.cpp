@@ -11,15 +11,13 @@
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
-#define DLLEXPORT extern "C" __declspec(dllexport)
-
-/*
-extern "C" {
-    float dtw_windowed(void * seq1v, void * seq2v, int seq1_len, int seq2_len, int window); 
-}
-*/
+//#define DLLEXPORT extern "C" __declspec(dllexport)
 
 using namespace Eigen;
+
+typedef Matrix<float, Dynamic, Dynamic, RowMajor> NDArrayFlattened;
+typedef Map<NDArrayFlattened> ExternNDArray;
+
 int int_pos(int i, int j, int cols) {
     // row major
     //printf("Access: %d*%d + %d = %d\n", i, cols, j, i*cols +j);
@@ -59,14 +57,87 @@ float* make_mat(const int n, const int m, const float fill) {
     return mat;
 }
 
+void dtw(const ExternNDArray & seq1, const ExternNDArray & seq2,
+         ExternNDArray & distmat_out, int window) {
+    float dist;
+    for (int i = 1; i < seq1.rows(); i++) {
+        for (int j = MAX(1, i - window); j < MIN(seq2.rows(), i + window); j++) {
+        //for (int j = 1; j < seq2.rows(); j++) {
+            dist = (seq1.row(i).array() - seq2.row(j).array()).matrix().norm();
+            //cosi_dist = -1*cosine(seq1.row(i), seq2.row(j));
+            distmat_out(i,j) = dist + MIN(distmat_out(i, j-1), 
+                                        MIN(distmat_out(i-1, j),
+                                            distmat_out(i-1, j-1)));
+        }
+    }
+}
+
+// No need for any Eigen stuff
+extern "C" void dtw_scalar(void * seq1v, void * seq2v, int seq1_len, int seq2_len,
+                void * distmat_outv) {
+    float* seq1 = (float*) seq1v;
+    float* seq2 = (float*) seq2v;
+    float* distmat_out = (float*) distmat_outv;
+    //float* distance_mat = make_mat(seq1_len, seq2_len, INFINITY);
+    clock_t tic = std::clock();
+    //dtw(seq1, seq2, distmat_out);
+    float dist;
+    for (int i = 1; i < seq1_len; i++) {
+        for (int j = 1; j < seq2_len; j++) {
+            dist = fabs(seq1[i] - seq2[j]);
+            //cosi_dist = -1*cosine(seq1.row(i), seq2.row(j));
+            distmat_out[int_pos(i,j,seq2_len)] = dist + 
+                MIN(distmat_out[int_pos(i, j-1, seq2_len)], 
+                    MIN(distmat_out[int_pos(i-1, j, seq2_len)],
+                        distmat_out[int_pos(i-1, j-1, seq2_len)]));
+        }
+    }
+    clock_t toc = std::clock();
+    double elapsed = double(toc - tic) / CLOCKS_PER_SEC;
+    printf("Took %0.5f seconds\n", elapsed);
+}
+
+/*
+struct Point {
+    int x, y;
+};
+
+struct FastDTWInfoObj {
+    float distance;
+    std::list<Point> path;
+};
+
+FastDTWInfoObj fastdtw_dtw(const MatrixXf & seq1, const MatrixXf & seq2,
+                           const FastDTWInfoObj & info, bool usePath, 
+                           int radius) {
+    // if we need to construct the window from the path (i.e. usePath is true)
+    // let's do that, otherwise 
+    // iterate through the 'window' constructed  
+}
+
+// Largely a C++ reimplementation of https://github.com/slaypni/fastdtw/blob/master/fastdtw.py
+void fastdtw(const MatrixXf & seq1, const MatrixXf & seq2,
+             int radius) {
+    int min_seq_size = radius + 2;
+    if ((seq1.rows() < min_seq_size) || (seq2.rows() < min_seq_size)) {
+        return dtw(seq1, seq2, distmat_out);
+    }
+
+    MatrixXf seq1_half = shrink(seq1);
+    MatrixXf seq2_half = shrink(seq2);
+
+    distance, path = fastdtw(x_shrinked, y_shrinked, radius=radius, dist=dist)
+}
+// EDIT on further review the Python implementation is poorly done, and redoing it from scratch in C++ 
+// is not a good use of my time for the moment
+*/
 /*inline uint64_t rdtsc() {
         uint32_t low, high;
         asm volatile ("rdtsc" : "=a" (low), "=d" (high));
         return (uint64_t)high << 32 | low;
 }*/
-typedef Matrix<float, Dynamic, Dynamic, RowMajor> NDArrayFlattened;
 
-DLLEXPORT void dtw_windowed(//void * seq1posv, void * seq2posv, 
+extern "C" void dtw_windowed(//void * seq1posv, void * seq2posv, 
                              void * seq1curvv, void * seq2curvv,
                              int seq1_len, int seq2_len, int window,
                              void * distmat_outv) {
@@ -76,40 +147,22 @@ DLLEXPORT void dtw_windowed(//void * seq1posv, void * seq2posv,
     //float* distance_mat = make_mat(seq1_len, seq2_len, INFINITY);
     //uint64_t tic = rdtsc();
     clock_t tic = std::clock();
+    window = MAX(window, abs(seq1_len - seq2_len) + 1);
     //MatrixXf distance_mat = MatrixXf::Constant(seq1_len, seq2_len, INFINITY);
-    Map<NDArrayFlattened> distmat_out((float*)distmat_outv, seq1_len, seq2_len);
+    ExternNDArray distmat_out((float*)distmat_outv, seq1_len, seq2_len);
     //distance_mat(0,0) = 0;
-    //Map<NDArrayFlattened> seq1pos((float*)seq1posv ,seq1_len,2);
-    Map<NDArrayFlattened> seq1curv((float*)seq1curvv ,seq1_len,2);
+    //ExternNDArray seq1pos((float*)seq1posv ,seq1_len,2);
+    ExternNDArray seq1curv((float*)seq1curvv ,seq1_len,2);
 
-    //Map<NDArrayFlattened> seq2pos((float*)seq2posv ,seq2_len,2);
-    Map<NDArrayFlattened> seq2curv((float*)seq2curvv ,seq2_len,2);
+    //ExternNDArray seq2pos((float*)seq2posv ,seq2_len,2);
+    ExternNDArray seq2curv((float*)seq2curvv ,seq2_len,2);
 
-    //printf("n: %d, m: %d\n", seq1_len, seq2_len);
-    window = MAX(window, abs(seq1_len - seq2_len));
-    //printf("Window: %d\n", window);
-    int i, j;
-    float dist;
-    for (i = 1; i < seq1_len; i++) {
-        //for (j = MAX(1, i-window); j < MIN(seq2_len,i+window); j++) {
-        for (j = 1; j < seq2_len; j++) {
-            // Wish there was a better way to do this...
-            dist = (seq1curv.row(i).array() - seq2curv.row(j).array()).matrix().norm();
-            //cosi_dist = -1*cosine(seq1curv.row(i), seq2curv.row(j));
-            distmat_out(i,j) = dist + MIN(distmat_out(i, j-1), 
-                                        MIN(distmat_out(i-1, j),
-                                            distmat_out(i-1, j-1)));
-        }   
-    }
-    // find minimal value along the last column as our distance
-    //float retval = distance_mat(seq1_len-1, seq2_len-1);
-    //uint64_t toc = rdtsc() - tic;
+    dtw(seq1curv, seq2curv, distmat_out, window);
+   
     clock_t toc = std::clock();
     double elapsed = double(toc - tic) / CLOCKS_PER_SEC;
     printf("Took %0.2f seconds\n", elapsed);
     //free(distance_mat);
     //return retval;
 }
-
-//DLLEXPORT void fastdtw  TODO implement fastdtw 
 

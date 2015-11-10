@@ -59,9 +59,11 @@ def build_segmenter():
     conv2 = ll.Conv2DLayer(conv1, num_filters=64, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv2')
     conv3 = ll.Conv2DLayer(conv2, num_filters=32, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv3')
     conv4 = ll.Conv2DLayer(conv3, num_filters=16, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv4')
+    conv5 = ll.Conv2DLayer(conv4, num_filters=8, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv5')
+    conv6 = ll.Conv2DLayer(conv5, num_filters=4, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv6')
 
     # our output layer is also convolutional, remember that our Y is going to be the same exact size as the
-    conv_final = ll.Conv2DLayer(conv4, num_filters=3, filter_size=(3,3), pad='same', W=Orthogonal(), name='conv_final', nonlinearity=linear)
+    conv_final = ll.Conv2DLayer(conv6, num_filters=3, filter_size=(3,3), pad='same', W=Orthogonal(), name='conv_final', nonlinearity=linear)
     # we need to reshape it to be a (batch*n*m x 3), i.e. unroll s.t. the feature dimension is preserved
     softmax = Softmax4D(conv_final, name='4dsoftmax')
 
@@ -77,6 +79,8 @@ def loss_iter(segmenter, update_params={}):
     predicted_mask_train = ll.get_output(segmenter, X)
     predicted_mask_valid = ll.get_output(segmenter, X, deterministic=True)
 
+    accuracy = lambda pred: T.mean(T.eq(T.argmax(pred, axis=1), T.argmax(y, axis=1)))
+
     pixel_weights_1d = pixel_weights.flatten(ndim=1)
     losses = lambda pred: T.mean(crossentropy_flat(pred, y + 1e-7) * pixel_weights_1d)
 
@@ -89,16 +93,18 @@ def loss_iter(segmenter, update_params={}):
     grads = T.grad(loss_train, all_params, add_names=True)
     #updates = adam(grads, all_params, **update_params)
     updates = adam(grads, all_params, **update_params)
+    acc_train = accuracy(predicted_mask_train)
+    acc_valid = accuracy(predicted_mask_valid)
 
     print("Compiling network for training")
     tic = time.time()
-    train_iter = theano.function([X, y, pixel_weights], [loss_train, losses(predicted_mask_train)] + grads, updates=updates)
+    train_iter = theano.function([X, y, pixel_weights], [loss_train, losses(predicted_mask_train), acc_train] + grads, updates=updates)
     toc = time.time() - tic
     print("Took %0.2f seconds" % toc)
     #theano.printing.pydotprint(loss, outfile='./loss_graph.png',var_with_name_simple=True)
     print("Compiling network for validation")
     tic = time.time()
-    valid_iter = theano.function([X, y, pixel_weights], losses(predicted_mask_valid))
+    valid_iter = theano.function([X, y, pixel_weights], [losses(predicted_mask_valid), acc_valid])
     toc = time.time() - tic
     print("Took %0.2f seconds" % toc)
 
@@ -181,6 +187,7 @@ if __name__ == "__main__":
         toc = time.time() - tic
         print("Train loss (reg): %0.3f\nTrain loss: %0.3f\nValid loss: %0.3f" %
                 (loss['train_reg_loss'],loss['train_loss'],loss['valid_loss']))
+        print("Train acc: %0.3f\nValid acc: %0.3f" % (loss['train_acc'], loss['valid_acc']))
         if loss['valid_loss'] < best_val_loss:
             best_params = ll.get_all_param_values(segmenter)
             best_val_loss = loss['valid_loss']
