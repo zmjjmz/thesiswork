@@ -235,6 +235,41 @@ def parameter_analysis(layer):
         print("Number of negative weights: %0.2f" % nneg_w)
         print("Weight norm (normalized by size): %0.10f" % normed_norm)
 
+def build_vgg16():
+    net = {}
+    net['input'] = ll.InputLayer((None, 3, None, None), name='inp')
+    net['conv1_1'] = ll.Conv2DLayer(net['input'], 64, 3, pad='same', name='conv1')
+    net['conv1_2'] = ll.Conv2DLayer(net['conv1_1'], 64, 3, pad='same', name='conv2')
+    #net['pool1'] = ll.Pool2DLayer(net['conv1_2'], 2)
+    net['conv2_1'] = ll.Conv2DLayer(net['conv1_2'], 128, 3, pad='same')
+    net['conv2_2'] = ll.Conv2DLayer(net['conv2_1'], 128, 3, pad='same')
+    #net['pool2'] = ll.Pool2DLayer(net['conv2_2'], 2)
+    net['conv3_1'] = ll.Conv2DLayer(net['conv2_2'], 256, 3, pad='same')
+    net['conv3_2'] = ll.Conv2DLayer(net['conv3_1'], 256, 3, pad='same')
+    net['conv3_3'] = ll.Conv2DLayer(net['conv3_2'], 256, 3, pad='same')
+    #net['pool3'] = ll.Pool2DLayer(net['conv3_3'], 2)
+    net['conv4_1'] = ll.Conv2DLayer(net['conv3_3'], 512, 3, pad='same')
+    net['conv4_2'] = ll.Conv2DLayer(net['conv4_1'], 512, 3, pad='same')
+    net['conv4_3'] = ll.Conv2DLayer(net['conv4_2'], 512, 3, pad='same')
+    #net['pool4'] = ll.Pool2DLayer(net['conv4_3'], 2)
+    net['conv5_1'] = ll.Conv2DLayer(net['conv4_3'], 512, 3, pad='same')
+    net['conv5_2'] = ll.Conv2DLayer(net['conv5_1'], 512, 3, pad='same')
+    net['conv5_3'] = ll.Conv2DLayer(net['conv5_2'], 512, 3, pad='same')
+    #net['pool5'] = ll.Pool2DLayer(net['conv5_3'], 2)
+    #net['fc6'] = ll.DenseLayer(net['pool5'], num_units=4096)
+    #net['fc7'] = ll.DenseLayer(net['fc6'], num_units=4096)
+    #net['fc8'] = ll.DenseLayer(net['fc7'], num_units=1000, nonlinearity=None)
+    #net['prob'] = ll.NonlinearityLayer(net['fc8'], softmax)
+
+    # load parameters
+    param_file = join(dataset_loc, "vgg16.pkl")
+    with open(param_file, 'r') as f:
+        params = pickle.load(f)
+
+    ll.set_all_param_values(net['conv5_3'], params['param values'][:26])
+    return net
+
+
 def display_losses(losses, n_epochs, batch_size, train_size, fn='losses.png'):
     import matplotlib.pyplot as plt
     ax = plt.subplot()

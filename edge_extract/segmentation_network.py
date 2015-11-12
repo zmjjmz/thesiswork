@@ -33,7 +33,8 @@ from train_utils import (
         load_whole_image,
         dataset_loc,
         parameter_analysis,
-        display_losses)
+        display_losses,
+        build_vgg16)
 
 class Softmax4D(ll.Layer):
     def get_output_for(self, input, **kwargs):
@@ -55,18 +56,26 @@ def crossentropy_flat(pred, true):
 
 def build_segmenter():
     inp = ll.InputLayer(shape=(None, 3, None, None), name='input')
-    conv1 = ll.Conv2DLayer(inp, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv1')
-    conv2 = ll.Conv2DLayer(conv1, num_filters=64, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv2')
-    conv3 = ll.Conv2DLayer(conv2, num_filters=32, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv3')
-    conv4 = ll.Conv2DLayer(conv3, num_filters=16, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv4')
-    conv5 = ll.Conv2DLayer(conv4, num_filters=8, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv5')
-    conv6 = ll.Conv2DLayer(conv5, num_filters=4, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv6')
+    conv1 = ll.Conv2DLayer(inp, num_filters=4, filter_size=(5,5), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv1')
+    conv2 = ll.Conv2DLayer(conv1, num_filters=8, filter_size=(5,5), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv2')
+    conv3 = ll.Conv2DLayer(conv2, num_filters=16, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv3')
+    conv4 = ll.Conv2DLayer(conv3, num_filters=8, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv4')
+    #conv5 = ll.Conv2DLayer(conv4, num_filters=8, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv5')
+    #conv6 = ll.Conv2DLayer(conv5, num_filters=4, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv6')
 
     # our output layer is also convolutional, remember that our Y is going to be the same exact size as the
-    conv_final = ll.Conv2DLayer(conv6, num_filters=3, filter_size=(3,3), pad='same', W=Orthogonal(), name='conv_final', nonlinearity=linear)
+    conv_final = ll.Conv2DLayer(conv4, num_filters=3, filter_size=(3,3), pad='same', W=Orthogonal(), name='conv_final', nonlinearity=linear)
     # we need to reshape it to be a (batch*n*m x 3), i.e. unroll s.t. the feature dimension is preserved
     softmax = Softmax4D(conv_final, name='4dsoftmax')
 
+    return softmax
+
+def build_segmenter_vgg():
+    vgg_net = build_vgg16()
+    conv3 = ll.Conv2DLayer(vgg_net['conv4_3'], num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv3')
+    conv4 = ll.Conv2DLayer(conv3, num_filters=64, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv4')
+    conv_final = ll.Conv2DLayer(conv4, num_filters=3, filter_size=(3,3), pad='same', W=Orthogonal(), name='conv_final', nonlinearity=linear)
+    softmax = Softmax4D(conv_final, name='4dsoftmax')
     return softmax
 
 def loss_iter(segmenter, update_params={}):
@@ -139,8 +148,8 @@ if __name__ == "__main__":
     parser.add_option("-t", "--test", action='store_true', dest='test')
     parser.add_option("-r", "--resume", action='store_true', dest='resume')
     parser.add_option("-d", "--dataset", action='store', type='string', dest='dataset')
-    parser.add_option("-b", "--batch_size", action="store", type="int", dest='batch_size')
-    parser.add_option("-e", "--epochs", action="store", type="int", dest="n_epochs")
+    parser.add_option("-b", "--batch_size", action="store", type="int", dest='batch_size', default=32)
+    parser.add_option("-e", "--epochs", action="store", type="int", dest="n_epochs", default=1)
     options, args = parser.parse_args()
     if options.test:
         test_data = np.zeros((1,3,32,32), dtype='float32')
@@ -166,7 +175,7 @@ if __name__ == "__main__":
     dset = {section:preproc_dataset(dset[section]) for section in dset}
     epoch_losses = []
     batch_losses = []
-    segmenter = build_segmenter()
+    segmenter = build_segmenter_vgg()
     model_path = join(dataset_loc, "Flukes/patches/%s/model.pkl" % dset_name)
     if options.resume and exists(model_path):
         with open(model_path, 'r') as f:
