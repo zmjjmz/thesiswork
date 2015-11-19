@@ -61,13 +61,14 @@ for i in range(niter):
     # circle area
     seq1_sc = np.array(curvature1['int_curv'][5],dtype=np.float32)[:,0].flatten()# + 1e-7
     seq2_sc = np.array(curvature2['int_curv'][5],dtype=np.float32)[:,0].flatten()# + 1e-7
+    print("Doing scalar")
 
     distance_mat_sc = (np.zeros((seq1_len, seq2_len), dtype=np.float32) + np.inf).flatten()
     distance_mat_sc[0] = 0
     dtw_scalar(
                         #ctypes.c_void_p(seq1pos.ctypes.data), ctypes.c_void_p(seq2pos.ctypes.data),
                         ctypes.c_void_p(seq1_sc.ctypes.data), ctypes.c_void_p(seq2_sc.ctypes.data),
-                        ctypes.c_int(seq1_len), ctypes.c_int(seq2_len),
+                        ctypes.c_int(seq1_len), ctypes.c_int(seq2_len), ctypes.c_int(100),
                         ctypes.c_void_p(distance_mat_sc.ctypes.data))
     print(distance_mat_sc[-1])
     cpp_sctotoc += time.time() - cpp_sctic

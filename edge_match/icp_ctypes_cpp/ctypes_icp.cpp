@@ -74,7 +74,8 @@ void dtw(const ExternNDArray & seq1, const ExternNDArray & seq2,
 
 // No need for any Eigen stuff
 extern "C" void dtw_scalar(void * seq1v, void * seq2v, int seq1_len, int seq2_len,
-                void * distmat_outv) {
+                int window, void * distmat_outv) {
+    window = MAX(window, abs(seq1_len - seq2_len) + 1);
     float* seq1 = (float*) seq1v;
     float* seq2 = (float*) seq2v;
     float* distmat_out = (float*) distmat_outv;
@@ -83,7 +84,8 @@ extern "C" void dtw_scalar(void * seq1v, void * seq2v, int seq1_len, int seq2_le
     //dtw(seq1, seq2, distmat_out);
     float dist;
     for (int i = 1; i < seq1_len; i++) {
-        for (int j = 1; j < seq2_len; j++) {
+        for (int j = MAX(1, i - window); j < MIN(seq2_len, i + window); j++) {
+        //for (int j = 1; j < seq2_len; j++) {
             dist = fabs(seq1[i] - seq2[j]);
             //cosi_dist = -1*cosine(seq1.row(i), seq2.row(j));
             distmat_out[int_pos(i,j,seq2_len)] = dist + 
