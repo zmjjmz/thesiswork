@@ -11,6 +11,7 @@ import theano.tensor as T
 from theano import function as tfunc
 import lasagne.layers as ll
 from lasagne.init import Constant
+from lasagne.nonlinearities import softmax
 import numpy as np
 import time
 from sklearn.utils import shuffle
@@ -44,8 +45,18 @@ def desc_func(desc_layer, save_diagram=True):
     descriptor = ll.get_output(desc_layer, X, deterministic=True)
     return tfunc([X], descriptor)
 
-def normalize_patch(patch, mean=128, std=255):
-    return (patch - mean) / (std)
+def get_img_norm_consts(imgbatch, grey=False):
+    if grey:
+        mean = np.average(imgbatch)
+        std = np.std(imgbatch)
+    else:
+        mean = np.average(imgbatch, axis=tuple(range(len(imgbatch.shape))[:-1]))
+        std = np.std(imgbatch, axis=tuple(range(len(imgbatch.shape))[:-1]))
+    return mean, std
+
+def normalize_patch(patch, mean=128, std=128):
+    # default to scaling between -1, 1
+    return (patch.astype(np.float32) - mean) / (std)
 
 
 def normalize_patches(patchset):
@@ -92,21 +103,31 @@ def desparsify(data):
         return data
 
 
-def load_dataset(dataset_path):
+def load_dataset(dataset_path, normalize_method='zscore'):
     print("Loading %s" % dataset_path)
     tic = time.time()
     dset = {}
+    with open(join(dataset_path, 'meanstd.pkl'), 'r') as f:
+        mean, std = pickle.load(f)
+        dset['mean'] = mean
+        dset['std'] = std
+    if normalize_method == 'zscore':
+        normalize = lambda x: (normalize_patch(x[0], mean=dset['mean'], std=dset['std']), x[1])
+    elif normalize_method == 'meansub':
+        normalize = lambda x: (x[0].astype(np.float32) - dset['mean'], x[1])
+    elif normalize_method is None:
+        normalize = lambda x: x
     with open(join(dataset_path, 'train.pkl'),'r') as f:
-        dset['train'] = pickle.load(f)
+        dset['train'] = normalize(pickle.load(f))
     with open(join(dataset_path, 'val.pkl'),'r') as f:
-        dset['valid'] = pickle.load(f)
+        dset['valid'] = normalize(pickle.load(f))
     with open(join(dataset_path, 'test.pkl'),'r') as f:
-        dset['test'] = pickle.load(f)
+        dset['test'] = normalize(pickle.load(f))
     toc = time.time() - tic
     print("Took %0.2f seconds" % toc)
     return dset
 
-def save_dataset(dataset_path, train, val, test):
+def save_dataset(dataset_path, train, val, test, load_norm_from=None, norms=None):
     if exists(dataset_path):
         print("Overwriting %s y/n" % dataset_path)
         confirm = raw_input().rstrip()
@@ -114,6 +135,20 @@ def save_dataset(dataset_path, train, val, test):
             return
     else:
         mkdir(dataset_path)
+    # assume train[0] is the dataset
+    # figure out normalization constants
+    if (load_norm_from is None) and (norms is None):
+        mean, std = get_img_norm_consts(train[0])
+    elif norms is not None:
+        mean, std = norms
+    elif load_norm_from is not None:
+        try:
+            with open(join(load_norm_from, 'meanstd.pkl'), 'r') as f:
+                mean, std = pickle.load(f)
+        except IOError:
+            print("Couldn't find mean and std in %s" % load_norm_from)
+            mean, std = get_img_norm_consts(train[0])
+
     tic = time.time()
     dset = {}
     with open(join(dataset_path, 'train.pkl'),'w') as f:
@@ -122,6 +157,8 @@ def save_dataset(dataset_path, train, val, test):
         pickle.dump(val,f)
     with open(join(dataset_path, 'test.pkl'),'w') as f:
         pickle.dump(test,f)
+    with open(join(dataset_path, 'meanstd.pkl'),'w') as f:
+        pickle.dump((mean, std),f)
     toc = time.time() - tic
     print("Took %0.2f seconds" % toc)
 
@@ -141,13 +178,8 @@ def load_identifier_eval(dataset_path):
     return dset
 
 def shuffle_dataset(dset):
-    # assume dset has X, y, pixelw
-    new_dset = {}
-    X, y, pixelw = shuffle(dset['X'], dset['y'], dset['pixelw'])
-    new_dset['X'] = X
-    new_dset['y'] = y
-    new_dset['pixelw'] = pixelw
-    # TODO this more elegantly
+    shuffled_dset = shuffle(*[dset[key] for key in sorted(dset.keys())])
+    new_dset = {key:shuffled_dset[ind] for ind, key in enumerate(sorted(dset.keys()))}
     return new_dset
 
 def check_for_dupes(idmap):
@@ -163,9 +195,10 @@ def check_for_dupes(idmap):
                 if is_equal(patchset1, patchset2):
                     print("%s has a duplicate image in %s's imageset" % (q_indv, d_indv))
 
-def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x: x)):
+def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x, sec: x)):
     nbatch_train = (dataset['train']['y'].shape[0] // batch_size)
     nbatch_valid = (dataset['valid']['y'].shape[0] // batch_size)
+    sections = ['X','y','pixelw'] # think of this as an ordering over the args for one of the loss_iter functions
     train_losses = []
     train_reg_losses = []
 
@@ -177,9 +210,9 @@ def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x:
     for batch_ind in range(nbatch_train):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
         # this takes care of the updates as well
-        bloss_grads = iteration_funcs['train'](batch_loader(dataset['train']['X'][batch_slice]),
-                                               dataset['train']['y'][batch_slice],
-                                               dataset['train']['pixelw'][batch_slice])
+        bloss_grads = iteration_funcs['train'](*[batch_loader(dataset['train'][section][batch_slice], section)
+            for section in filter(lambda x: x in dataset['train'], sections)])
+
         batch_train_loss_reg = bloss_grads.pop(0)
         batch_train_loss = bloss_grads.pop(0)
         batch_train_acc = bloss_grads.pop(0)
@@ -201,10 +234,8 @@ def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x:
     valid_losses = []
     for batch_ind in range(nbatch_valid):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
-        # this takes care of the updates as well
-        batch_valid_loss, batch_valid_acc = iteration_funcs['valid'](batch_loader(dataset['valid']['X'][batch_slice]),
-                                                    dataset['valid']['y'][batch_slice],
-                                                    dataset['valid']['pixelw'][batch_slice])
+        batch_valid_loss, batch_valid_acc = iteration_funcs['valid'](*[batch_loader(dataset['valid'][section][batch_slice], section)
+            for section in filter(lambda x: x in dataset['valid'], sections)])
         valid_losses.append(batch_valid_loss)
         valid_accs.append(batch_valid_acc)
 
@@ -235,22 +266,27 @@ def parameter_analysis(layer):
         print("Number of negative weights: %0.2f" % nneg_w)
         print("Weight norm (normalized by size): %0.10f" % normed_norm)
 
-def build_vgg16():
+def build_vgg16_seg():
     net = {}
     net['input'] = ll.InputLayer((None, 3, None, None), name='inp')
     net['conv1_1'] = ll.Conv2DLayer(net['input'], 64, 3, pad='same', name='conv1')
-    net['conv1_2'] = ll.Conv2DLayer(net['conv1_1'], 64, 3, pad='same', name='conv2')
+    net['drop1'] = ll.DropoutLayer(net['conv1_1'], p=0.5)
+    net['conv1_2'] = ll.Conv2DLayer(net['drop1'], 64, 3, pad='same', name='conv2')
     #net['pool1'] = ll.Pool2DLayer(net['conv1_2'], 2)
     net['conv2_1'] = ll.Conv2DLayer(net['conv1_2'], 128, 3, pad='same')
-    net['conv2_2'] = ll.Conv2DLayer(net['conv2_1'], 128, 3, pad='same')
+    net['drop2'] = ll.DropoutLayer(net['conv2_1'], p=0.5)
+    net['conv2_2'] = ll.Conv2DLayer(net['drop2'], 128, 3, pad='same')
     #net['pool2'] = ll.Pool2DLayer(net['conv2_2'], 2)
     net['conv3_1'] = ll.Conv2DLayer(net['conv2_2'], 256, 3, pad='same')
-    net['conv3_2'] = ll.Conv2DLayer(net['conv3_1'], 256, 3, pad='same')
+    net['drop3'] = ll.DropoutLayer(net['conv3_1'], p=0.5)
+    net['conv3_2'] = ll.Conv2DLayer(net['drop3'], 256, 3, pad='same')
     net['conv3_3'] = ll.Conv2DLayer(net['conv3_2'], 256, 3, pad='same')
+    net['drop4'] = ll.DropoutLayer(net['conv3_3'], p=0.5)
     #net['pool3'] = ll.Pool2DLayer(net['conv3_3'], 2)
-    net['conv4_1'] = ll.Conv2DLayer(net['conv3_3'], 512, 3, pad='same')
+    net['conv4_1'] = ll.Conv2DLayer(net['drop4'], 512, 3, pad='same')
     net['conv4_2'] = ll.Conv2DLayer(net['conv4_1'], 512, 3, pad='same')
-    net['conv4_3'] = ll.Conv2DLayer(net['conv4_2'], 512, 3, pad='same')
+    net['drop5'] = ll.DropoutLayer(net['conv4_2'], p=0.5)
+    net['conv4_3'] = ll.Conv2DLayer(net['drop5'], 512, 3, pad='same')
     #net['pool4'] = ll.Pool2DLayer(net['conv4_3'], 2)
     net['conv5_1'] = ll.Conv2DLayer(net['conv4_3'], 512, 3, pad='same')
     net['conv5_2'] = ll.Conv2DLayer(net['conv5_1'], 512, 3, pad='same')
@@ -269,6 +305,77 @@ def build_vgg16():
     ll.set_all_param_values(net['conv5_3'], params['param values'][:26])
     return net
 
+def build_vgg16_class():
+    net = {}
+    net['input'] = ll.InputLayer((None, 3, 224, 224), name='inp')
+    net['conv1_1'] = ll.Conv2DLayer(net['input'], 64, 3, pad='same', name='conv1')
+    net['drop1'] = ll.DropoutLayer(net['conv1_1'], p=0.5)
+    net['conv1_2'] = ll.Conv2DLayer(net['drop1'], 64, 3, pad='same', name='conv2')
+    net['pool1'] = ll.Pool2DLayer(net['conv1_2'], 2)
+    net['conv2_1'] = ll.Conv2DLayer(net['pool1'], 128, 3, pad='same')
+    net['drop2'] = ll.DropoutLayer(net['conv2_1'], p=0.5)
+    net['conv2_2'] = ll.Conv2DLayer(net['drop2'], 128, 3, pad='same')
+    net['pool2'] = ll.Pool2DLayer(net['conv2_2'], 2)
+    net['conv3_1'] = ll.Conv2DLayer(net['pool2'], 256, 3, pad='same')
+    net['drop3'] = ll.DropoutLayer(net['conv3_1'], p=0.5)
+    net['conv3_2'] = ll.Conv2DLayer(net['drop3'], 256, 3, pad='same')
+    net['conv3_3'] = ll.Conv2DLayer(net['conv3_2'], 256, 3, pad='same')
+    net['drop4'] = ll.DropoutLayer(net['conv3_3'], p=0.5)
+    net['pool3'] = ll.Pool2DLayer(net['drop4'], 2)
+    net['conv4_1'] = ll.Conv2DLayer(net['pool3'], 512, 3, pad='same')
+    net['conv4_2'] = ll.Conv2DLayer(net['conv4_1'], 512, 3, pad='same')
+    net['drop5'] = ll.DropoutLayer(net['conv4_2'], p=0.5)
+    net['conv4_3'] = ll.Conv2DLayer(net['drop5'], 512, 3, pad='same')
+    net['pool4'] = ll.Pool2DLayer(net['conv4_3'], 2)
+    net['conv5_1'] = ll.Conv2DLayer(net['pool4'], 512, 3, pad='same')
+    net['conv5_2'] = ll.Conv2DLayer(net['conv5_1'], 512, 3, pad='same')
+    net['conv5_3'] = ll.Conv2DLayer(net['conv5_2'], 512, 3, pad='same')
+    net['pool5'] = ll.Pool2DLayer(net['conv5_3'], 2)
+    net['fc6'] = ll.DenseLayer(net['pool5'], num_units=4096)
+    net['fc7'] = ll.DenseLayer(net['fc6'], num_units=4096)
+    net['fc8'] = ll.DenseLayer(net['fc7'], num_units=1000, nonlinearity=None)
+    net['prob'] = ll.NonlinearityLayer(net['fc8'], nonlinearity=softmax)
+
+    # load parameters
+    param_file = join(dataset_loc, "vgg16.pkl")
+    with open(param_file, 'r') as f:
+        params = pickle.load(f)
+
+    ll.set_all_param_values(net['fc8'], params['param values'])
+    return net
+
+def build_vgg16hump_class():
+    net = {}
+    net['input'] = ll.InputLayer((None, 3, 224, 224), name='inp')
+    net['conv1_1'] = ll.Conv2DLayer(net['input'], 64, 3, pad='same', name='conv1')
+    net['drop1'] = ll.DropoutLayer(net['conv1_1'], p=0.5)
+    net['conv1_2'] = ll.Conv2DLayer(net['drop1'], 64, 3, pad='same', name='conv2')
+    net['pool1'] = ll.Pool2DLayer(net['conv1_2'], 2)
+    net['conv2_1'] = ll.Conv2DLayer(net['pool1'], 128, 3, pad='same')
+    net['drop2'] = ll.DropoutLayer(net['conv2_1'], p=0.5)
+    net['conv2_2'] = ll.Conv2DLayer(net['drop2'], 128, 3, pad='same')
+    net['pool2'] = ll.Pool2DLayer(net['conv2_2'], 2)
+    net['conv3_1'] = ll.Conv2DLayer(net['pool2'], 256, 3, pad='same')
+    net['drop3'] = ll.DropoutLayer(net['conv3_1'], p=0.5)
+    net['conv3_2'] = ll.Conv2DLayer(net['drop3'], 256, 3, pad='same')
+    net['conv3_3'] = ll.Conv2DLayer(net['conv3_2'], 256, 3, pad='same')
+    net['drop4'] = ll.DropoutLayer(net['conv3_3'], p=0.5)
+    net['pool3'] = ll.Pool2DLayer(net['drop4'], 2)
+    net['conv4_1'] = ll.Conv2DLayer(net['pool3'], 512, 3, pad='same')
+    net['conv4_2'] = ll.Conv2DLayer(net['conv4_1'], 512, 3, pad='same')
+    net['drop5'] = ll.DropoutLayer(net['conv4_2'], p=0.5)
+    net['conv4_3'] = ll.Conv2DLayer(net['drop5'], 512, 3, pad='same')
+    net['pool4'] = ll.Pool2DLayer(net['conv4_3'], 2)
+    net['conv5_1'] = ll.Conv2DLayer(net['pool4'], 512, 3, pad='same')
+    net['conv5_2'] = ll.Conv2DLayer(net['conv5_1'], 512, 3, pad='same')
+    net['conv5_3'] = ll.Conv2DLayer(net['conv5_2'], 512, 3, pad='same')
+    net['pool5'] = ll.Pool2DLayer(net['conv5_3'], 2)
+    net['fc6'] = ll.DenseLayer(net['pool5'], num_units=4096)
+    net['fc7'] = ll.DenseLayer(net['fc6'], num_units=4096)
+    net['fc8'] = ll.DenseLayer(net['fc7'], num_units=1001, nonlinearity=None)
+    net['prob'] = ll.NonlinearityLayer(net['fc8'], nonlinearity=softmax)
+
+    return net['prob']
 
 def display_losses(losses, n_epochs, batch_size, train_size, fn='losses.png'):
     import matplotlib.pyplot as plt

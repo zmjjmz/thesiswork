@@ -35,86 +35,50 @@ from train_utils import (
         dataset_loc,
         parameter_analysis,
         display_losses,
-        build_vgg16_seg)
+        build_vgg16)
 
-class Softmax4D(ll.Layer):
-    def get_output_for(self, input, **kwargs):
-        si = input.reshape((input.shape[0], input.shape[1], -1))
-        shp = (si.shape[0], 1, si.shape[2])
-        exp = T.exp(si - si.max(axis=1).reshape(shp))
-        softmax_expression = (exp / (exp.sum(axis=1).reshape(shp) + 1e-7) ).reshape(input.shape)
-        return softmax_expression
+def build_network():
 
-def crossentropy_flat(pred, true):
-    # basically we have a distribution output that's in the shape batch, prob, h, w
-    # it doesn't look like we can apply the nnet categorical cross entropy easily on a tensor4
-    # so we'll have to flatten it out to a tensor2, which is a pain in the ass but easily done
 
-    pred2 = pred.dimshuffle(1,0,2,3).flatten(ndim=2).dimshuffle(1,0)
-    true2 = true.dimshuffle(1,0,2,3).flatten(ndim=2).dimshuffle(1,0)
 
-    return T.nnet.categorical_crossentropy(pred2, true2)
-
-def build_segmenter():
-    inp = ll.InputLayer(shape=(None, 3, None, None), name='input')
-    conv1 = ll.Conv2DLayer(inp, num_filters=4, filter_size=(7,7), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv1')
-    conv2 = ll.Conv2DLayer(conv1, num_filters=8, filter_size=(5,5), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv2')
-    conv3 = ll.Conv2DLayer(conv2, num_filters=16, filter_size=(5,5), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv3')
-    conv4 = ll.Conv2DLayer(conv3, num_filters=8, filter_size=(5,5), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv4')
-    conv5 = ll.Conv2DLayer(conv4, num_filters=8, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv5')
-    conv6 = ll.Conv2DLayer(conv5, num_filters=4, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv6')
-
-    # our output layer is also convolutional, remember that our Y is going to be the same exact size as the
-    conv_final = ll.Conv2DLayer(conv6, num_filters=3, filter_size=(3,3), pad='same', W=Orthogonal(), name='conv_final', nonlinearity=linear)
-    # we need to reshape it to be a (batch*n*m x 3), i.e. unroll s.t. the feature dimension is preserved
-    softmax = Softmax4D(conv_final, name='4dsoftmax')
-
-    return softmax
-
-def build_segmenter_vgg():
-    vgg_net = build_vgg16_seg()
-    conv3 = ll.Conv2DLayer(vgg_net['conv4_3'], num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv3')
-    conv4 = ll.Conv2DLayer(conv3, num_filters=64, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv4')
-    conv_final = ll.Conv2DLayer(conv4, num_filters=3, filter_size=(3,3), pad='same', W=Orthogonal(), name='conv_final', nonlinearity=linear)
-    softmax = Softmax4D(conv_final, name='4dsoftmax')
-    return softmax
-
-def loss_iter(segmenter, update_params={}):
+def loss_iter(classifier, update_params={}):
     X = T.tensor4()
     y = T.tensor4()
-    pixel_weights = T.tensor3()
+    #pixel_weights = T.tensor3()
 
-    all_layers = ll.get_all_layers(segmenter)
-    imwrite_architecture(all_layers, './layer_rep.png')
-    predicted_mask_train = ll.get_output(segmenter, X)
-    predicted_mask_valid = ll.get_output(segmenter, X, deterministic=True)
+    all_layers = ll.get_all_layers(classifier)
+    imwrite_architecture(all_layers, join(dataset_loc, 'Flukes/humpnet/layer_rep.png'))
+    predicted_class_train = ll.get_output(classifier, X)
+    predicted_class_valid = ll.get_output(classifier, X, deterministic=True)
 
     accuracy = lambda pred: T.mean(T.eq(T.argmax(pred, axis=1), T.argmax(y, axis=1)))
 
-    pixel_weights_1d = pixel_weights.flatten(ndim=1)
-    losses = lambda pred: T.mean(crossentropy_flat(pred + 1e-7, y + 1e-7) * pixel_weights_1d)
+    losses = lambda pred: T.mean(crossentropy_flat(pred + 1e-7, y + 1e-7))
 
     decay = 0.0001
-    reg = regularize_network_params(segmenter, l2) * decay
+    reg = regularize_network_params(classifier, l2) * decay
     losses_reg = lambda pred: losses(pred) + reg
-    loss_train = losses_reg(predicted_mask_train)
+    loss_train = losses_reg(predicted_class_train)
     loss_train.name = 'combined_loss' # for the names
-    all_params = ll.get_all_params(segmenter)
+    all_params = ll.get_all_params(classifier)
+    # we actually only want the last layer's gradient
+    # and even then we only want the slice corresponding to the 1000'th class (humpbacks)
+
     grads = T.grad(loss_train, all_params, add_names=True)
     #updates = adam(grads, all_params, **update_params)
     updates = adam(grads, all_params, **update_params)
-    acc_train = accuracy(predicted_mask_train)
-    acc_valid = accuracy(predicted_mask_valid)
+    acc_train = accuracy(predicted_class_train)
+    acc_valid = accuracy(predicted_class_valid)
 
     print("Compiling network for training")
     tic = time.time()
-    train_iter = theano.function([X, y, pixel_weights], [loss_train, losses(predicted_mask_train), acc_train] + grads, updates=updates)
+    train_iter = theano.function([X, y], [loss_train, losses(predicted_class_train), acc_train] + grads, updates=updates)
     toc = time.time() - tic
     print("Took %0.2f seconds" % toc)
     #theano.printing.pydotprint(loss, outfile='./loss_graph.png',var_with_name_simple=True)
     print("Compiling network for validation")
     tic = time.time()
-    valid_iter = theano.function([X, y, pixel_weights], [losses(predicted_mask_valid), acc_valid])
+    valid_iter = theano.function([X, y], [losses(predicted_class_valid), acc_valid])
     toc = time.time() - tic
     print("Took %0.2f seconds" % toc)
 
@@ -127,30 +91,18 @@ def preproc_dataset(dataset):
     patches = dataset[0]
     #patches = np.array(patches.reshape(-1, patches.shape[3], patches.shape[1], patches.shape[2]), dtype='float32')
     patches = np.array(patches.swapaxes(1,3), dtype='float32')
-    # fake patches for debugging
-    #patches = np.zeros(patches.shape, dtype=patches.dtype)
-    #patches += np.random.rand(*(patches.shape))
 
-    # bleh no dimshuffle in numpy
-    #labels = np.array(dataset[1].reshape(-1, dataset[1].shape[3], dataset[1].shape[1], dataset[1].shape[2]), dtype='float32')
-    labels = np.array(dataset[1].swapaxes(1,3), dtype='float32')
     print(np.average(patches, axis=(0,2,3)))
     print(np.std(patches, axis=(0,2,3)))
-    # a test
-    #np.random.shuffle(labels)
-    #print(np.argmax(labels, axis=1))
-    pixel_weights = np.ones((labels.shape[0], labels.shape[2], labels.shape[3]), dtype='float32')
-    # theoretically there would be 1/32 edge to non-edge ratio
-    # but the way it's sampled doesn't really lead to that, it's more like a 1/50, and they're important
-    pixel_weights[np.argmax(labels, axis=1) == 0] = 1.
+    labels = dataset[1]
 
-    return shuffle_dataset({'X':patches, 'y':labels, 'pixelw':pixel_weights})
+    return shuffle_dataset({'X':patches, 'y':labels,})
 
 if __name__ == "__main__":
     parser = OptionParser()
     parser.add_option("-t", "--test", action='store_true', dest='test')
     parser.add_option("-r", "--resume", action='store_true', dest='resume')
-    parser.add_option("-d", "--dataset", action='store', type='string', dest='dataset')
+    #parser.add_option("-d", "--dataset", action='store', type='string', dest='dataset')
     parser.add_option("-b", "--batch_size", action="store", type="int", dest='batch_size', default=32)
     parser.add_option("-e", "--epochs", action="store", type="int", dest="n_epochs", default=1)
     options, args = parser.parse_args()
@@ -173,14 +125,14 @@ if __name__ == "__main__":
     batch_size = options.batch_size
     print("Loading dataset")
     tic = time.time()
-    dset = load_dataset(join(dataset_loc, "Flukes/patches/%s" % dset_name), normalize_method='meansub')
+    dset = load_dataset(join(dataset_loc, "Flukes/humpnet"))
     dset = {section:preproc_dataset(dset[section]) for section in ['train', 'valid', 'test']}
     # load_dataset normalizes
     toc = time.time() - tic
     epoch_losses = []
     batch_losses = []
     segmenter = build_segmenter_vgg()
-    model_path = join(dataset_loc, "Flukes/patches/%s/model.pkl" % dset_name)
+    model_path = join(dataset_loc, "Flukes/humpnet/model.pkl")
     if options.resume and exists(model_path):
         with open(model_path, 'r') as f:
             params = pickle.load(f)
@@ -214,5 +166,8 @@ if __name__ == "__main__":
     display_losses(losses, n_epochs, batch_size, dset['train']['X'].shape[0])
 
     # TODO: move to train_utils and add way to load up previous model
-    with open(join(dataset_loc, "Flukes/patches/%s/model.pkl" % dset_name), 'w') as f:
+    with open(join(dataset_loc, "Flukes/humpnet/model.pkl"), 'w') as f:
         pickle.dump(best_params, f)
+
+
+
