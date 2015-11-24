@@ -15,7 +15,7 @@ from optparse import OptionParser
 
 import lasagne.layers as ll
 from lasagne.nonlinearities import linear, softmax, sigmoid, rectify
-from lasagne.objectives import binary_crossentropy
+from lasagne.objectives import binary_crossentropy, categorical_crossentropy
 from lasagne.updates import adam, nesterov_momentum
 from lasagne.init import Orthogonal, Constant
 from lasagne.regularization import l2, regularize_network_params
@@ -35,44 +35,64 @@ from train_utils import (
         dataset_loc,
         parameter_analysis,
         display_losses,
-        build_vgg16)
+        build_vgg16hump_class,
+        argmax_classes)
 
-def build_network():
+def build_network(dset_name, load_prev=False):
+    net = build_vgg16hump_class()
+    if not load_prev:
+        param_file = join(dset_name, 'initial_vgg16.pkl')
+    else:
+        param_file = join(dset_name, "model.pkl")
+    with open(param_file, 'r') as f:
+        params = pickle.load(f)
+
+    ll.set_all_param_values(net['prob'], params)
+    return net
 
 
 
 def loss_iter(classifier, update_params={}):
+    classifier_layer = classifier['prob']
     X = T.tensor4()
-    y = T.tensor4()
+    y = T.matrix()
     #pixel_weights = T.tensor3()
 
-    all_layers = ll.get_all_layers(classifier)
-    imwrite_architecture(all_layers, join(dataset_loc, 'Flukes/humpnet/layer_rep.png'))
-    predicted_class_train = ll.get_output(classifier, X)
-    predicted_class_valid = ll.get_output(classifier, X, deterministic=True)
+    #all_layers = ll.get_all_layers(classifier)
+    #imwrite_architecture(all_layers, join(dataset_loc, 'Flukes/humpnet/layer_rep.png'))
+    predicted_class_train = ll.get_output(classifier_layer, X)
+    predicted_class_valid = ll.get_output(classifier_layer, X, deterministic=True)
 
     accuracy = lambda pred: T.mean(T.eq(T.argmax(pred, axis=1), T.argmax(y, axis=1)))
 
-    losses = lambda pred: T.mean(crossentropy_flat(pred + 1e-7, y + 1e-7))
+    losses = lambda pred: T.mean(categorical_crossentropy(pred + 1e-7, y))
 
-    decay = 0.0001
-    reg = regularize_network_params(classifier, l2) * decay
+    decay = 0.001
+    reg = regularize_network_params(classifier_layer, l2) * decay
     losses_reg = lambda pred: losses(pred) + reg
     loss_train = losses_reg(predicted_class_train)
-    loss_train.name = 'combined_loss' # for the names
-    all_params = ll.get_all_params(classifier)
+    loss_train.name = 'reg_loss' # for the names
+    #all_params = ll.get_all_params(classifier_layer)
+    top_W, top_b = classifier_layer.input_layer.get_params()
+
     # we actually only want the last layer's gradient
     # and even then we only want the slice corresponding to the 1000'th class (humpbacks)
+    humpback_ind = 1000
+    humpback_W = top_W[:,1000]
+    humpback_b = top_b[1000]
 
-    grads = T.grad(loss_train, all_params, add_names=True)
+    gradW = T.grad(loss_train, top_W, add_names=True)
+    gradb = T.grad(loss_train, top_b, add_names=True)
+    gradW_hump = T.set_subtensor(gradW[:,:1000], 0)
+    gradb_hump = T.set_subtensor(gradb[:1000], 0)
     #updates = adam(grads, all_params, **update_params)
-    updates = adam(grads, all_params, **update_params)
+    updates = adam([gradW_hump, gradb_hump], [top_W, top_b], **update_params)
     acc_train = accuracy(predicted_class_train)
     acc_valid = accuracy(predicted_class_valid)
 
     print("Compiling network for training")
     tic = time.time()
-    train_iter = theano.function([X, y], [loss_train, losses(predicted_class_train), acc_train] + grads, updates=updates)
+    train_iter = theano.function([X, y], [loss_train, losses(predicted_class_train), acc_train, gradW_hump, gradb_hump], updates=updates)
     toc = time.time() - tic
     print("Took %0.2f seconds" % toc)
     #theano.printing.pydotprint(loss, outfile='./loss_graph.png',var_with_name_simple=True)
@@ -82,7 +102,7 @@ def loss_iter(classifier, update_params={}):
     toc = time.time() - tic
     print("Took %0.2f seconds" % toc)
 
-    return {'train':train_iter, 'valid':valid_iter, 'gradnames':[g.name for g in grads]}
+    return {'train':train_iter, 'valid':valid_iter, 'gradnames':['topW', 'topb']}
 
 def preproc_dataset(dataset):
     # assume dataset is a tuple of X, y
@@ -90,13 +110,14 @@ def preproc_dataset(dataset):
 
     patches = dataset[0]
     #patches = np.array(patches.reshape(-1, patches.shape[3], patches.shape[1], patches.shape[2]), dtype='float32')
-    patches = np.array(patches.swapaxes(1,3), dtype='float32')
+    #patches = np.array(patches.swapaxes(1,3), dtype='float32')
 
-    print(np.average(patches, axis=(0,2,3)))
-    print(np.std(patches, axis=(0,2,3)))
+    #print(np.average(patches, axis=(0,1,2)))
+    #print(np.std(patches, axis=(0,1,2)))
     labels = dataset[1]
 
     return shuffle_dataset({'X':patches, 'y':labels,})
+
 
 if __name__ == "__main__":
     parser = OptionParser()
@@ -107,44 +128,45 @@ if __name__ == "__main__":
     parser.add_option("-e", "--epochs", action="store", type="int", dest="n_epochs", default=1)
     options, args = parser.parse_args()
     if options.test:
-        test_data = np.zeros((1,3,32,32), dtype='float32')
-        test_data += np.random.rand(1, 3, 32, 32)
-        test_y = np.zeros((1,3,32,32),dtype='float32')
-        test_y[:,0,:,:] = np.ones((1,1,32,32))
+        dset_name = join(dataset_loc, "Flukes/TESThumpnet")
+    else:
+        dset_name = join(dataset_loc, "Flukes/humpnet")
 
-        X = T.tensor4()
-        y = T.tensor4()
-        network = build_segmenter()
-        segmenter = ll.get_output(network, X)
-        loss = crossentropy_flat(segmenter, y)
-        output = loss.eval({X:test_data, y:test_y})
-        print(output)
-        sys.exit(0)
-    dset_name = options.dataset
     n_epochs = options.n_epochs
     batch_size = options.batch_size
-    print("Loading dataset")
-    tic = time.time()
-    dset = load_dataset(join(dataset_loc, "Flukes/humpnet"))
-    dset = {section:preproc_dataset(dset[section]) for section in ['train', 'valid', 'test']}
-    # load_dataset normalizes
-    toc = time.time() - tic
     epoch_losses = []
     batch_losses = []
-    segmenter = build_segmenter_vgg()
+    classifier = build_network(dset_name, load_prev=options.resume)
+    """
     model_path = join(dataset_loc, "Flukes/humpnet/model.pkl")
     if options.resume and exists(model_path):
         with open(model_path, 'r') as f:
             params = pickle.load(f)
-        ll.set_all_param_values(segmenter, params)
-    #iter_funcs = loss_iter(segmenter, update_params={'learning_rate':.01})
-    iter_funcs = loss_iter(segmenter, update_params={})
-    best_params = ll.get_all_param_values(segmenter)
+        ll.set_all_param_values(classifier, params)
+    """
+    #iter_funcs = loss_iter(classifier, update_params={'learning_rate':.01})
+    iter_funcs = loss_iter(classifier, update_params={})
+    best_params = ll.get_all_param_values(classifier['prob'])
     best_val_loss = np.inf
+    print("Loading dataset")
+    dset = load_dataset(dset_name, normalize_method=None)
+    print(dset.keys())
+
+    def normalizing_batch_loader(batch_data, section):
+        if section == 'X':
+            return (batch_data - dset['mean']).swapaxes(1,3).astype(np.float32)
+        elif section == 'y':
+            return argmax_classes(batch_data, nclasses=1001)
+        else:
+            return batch_data
+
+    for section in ['train', 'valid', 'test']:
+        dset[section] = preproc_dataset(dset[section])
+
     for epoch in range(n_epochs):
         tic = time.time()
         print("Epoch %d" % (epoch))
-        loss = train_epoch(iter_funcs, dset, batch_size=batch_size)
+        loss = train_epoch(iter_funcs, dset, batch_size=batch_size, batch_loader=normalizing_batch_loader)
         epoch_losses.append(loss['train_loss'])
         batch_losses.append(loss['all_train_loss'])
         # shuffle training set
@@ -154,7 +176,7 @@ if __name__ == "__main__":
                 (loss['train_reg_loss'],loss['train_loss'],loss['valid_loss']))
         print("Train acc: %0.3f\nValid acc: %0.3f" % (loss['train_acc'], loss['valid_acc']))
         if loss['valid_loss'] < best_val_loss:
-            best_params = ll.get_all_param_values(segmenter)
+            best_params = ll.get_all_param_values(classifier['prob'])
             best_val_loss = loss['valid_loss']
             print("New best validation loss!")
         print("Took %0.2f seconds" % toc)
@@ -162,11 +184,11 @@ if __name__ == "__main__":
     losses = {}
     losses['batch'] = batch_losses
     losses['epoch'] = epoch_losses
-    parameter_analysis(segmenter)
+    parameter_analysis(classifier['prob'])
     display_losses(losses, n_epochs, batch_size, dset['train']['X'].shape[0])
 
     # TODO: move to train_utils and add way to load up previous model
-    with open(join(dataset_loc, "Flukes/humpnet/model.pkl"), 'w') as f:
+    with open(join(dset_name, "model.pkl"), 'w') as f:
         pickle.dump(best_params, f)
 
 

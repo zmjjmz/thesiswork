@@ -34,6 +34,16 @@ def make_identity_transform():
     W = Constant(0.0)
     return W, b
 
+def argmax_classes(classes, nclasses=None):
+    # assume classes is a ndarray of int32
+    if nclasses is None:
+        nclasses = np.max(classes) + 1
+    classes_sparse = np.zeros((classes.shape[0], nclasses), dtype=np.float32)
+    classes_sparse[zip(*enumerate(classes))] = 1
+    return classes_sparse
+
+
+
 
 def desc_func(desc_layer, save_diagram=True):
     # takes a layer and makes a function that returns its output
@@ -207,6 +217,7 @@ def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x,
 
     grad_mags = []
     grad_means = []
+    grad_nzs = []
     for batch_ind in range(nbatch_train):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
         # this takes care of the updates as well
@@ -218,15 +229,17 @@ def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x,
         batch_train_acc = bloss_grads.pop(0)
         grad_mags.append([np.linalg.norm(grad) for grad in bloss_grads])
         grad_means.append([np.mean(np.abs(grad)) for grad in bloss_grads])
+        grad_nzs.append([np.count_nonzero(grad) for grad in bloss_grads])
         train_reg_losses.append(batch_train_loss_reg)
         train_losses.append(batch_train_loss)
         train_accs.append(batch_train_acc)
 
-    avg_grad_mags = np.mean(np.array(grad_mags),axis=0)
-    avg_grad_means = np.mean(np.array(grad_means),axis=0)
+    avg_grad_mags = np.average(np.array(grad_mags), axis=0)
+    avg_grad_means = np.average(np.array(grad_means), axis=0)
     print("Gradient names:\t%s" % iteration_funcs['gradnames'])
     print("Gradient magnitudes:\t%s" % avg_grad_mags)
     print("Gradient means:\t%s" % avg_grad_means)
+    print("Gadient nonzeros:\t%s" % grad_nzs[0]) # this shouldn't change
     avg_train_loss = np.mean(train_losses)
     avg_train_reg_loss = np.mean(train_reg_losses)
     avg_train_acc = np.mean(train_accs)
@@ -375,7 +388,7 @@ def build_vgg16hump_class():
     net['fc8'] = ll.DenseLayer(net['fc7'], num_units=1001, nonlinearity=None)
     net['prob'] = ll.NonlinearityLayer(net['fc8'], nonlinearity=softmax)
 
-    return net['prob']
+    return net
 
 def display_losses(losses, n_epochs, batch_size, train_size, fn='losses.png'):
     import matplotlib.pyplot as plt
@@ -384,5 +397,6 @@ def display_losses(losses, n_epochs, batch_size, train_size, fn='losses.png'):
     ax.scatter(range(n_epochs*batches_per_epoch), losses['batch'], color='g')
     ax.scatter([i*batches_per_epoch for i in range(n_epochs)], losses['epoch'], color='r', s=10.)
     plt.savefig(fn)
+
 
 
