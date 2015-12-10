@@ -17,7 +17,11 @@
 using namespace Eigen;
 
 typedef Matrix<float, Dynamic, Dynamic, RowMajor> NDArrayFlattened;
-typedef Map<NDArrayFlattened> ExternNDArray;
+typedef Map<NDArrayFlattened> ExternNDArrayf;
+
+typedef Matrix<int, Dynamic, Dynamic, RowMajor> NDArrayFlattenedi;
+typedef Map<NDArrayFlattenedi> ExternNDArrayi;
+
 
 int int_pos(int i, int j, int cols) {
     // row major
@@ -58,8 +62,8 @@ float* make_mat(const int n, const int m, const float fill) {
     return mat;
 }
 
-void dtw(const ExternNDArray & seq1, const ExternNDArray & seq2,
-         ExternNDArray & distmat_out, int window) {
+void dtw(const ExternNDArrayf & seq1, const ExternNDArrayf & seq2,
+         ExternNDArrayf & distmat_out, int window) {
     float dist;
     for (int i = 1; i < seq1.rows(); i++) {
         for (int j = MAX(1, i - window); j < MIN(seq2.rows(), i + window); j++) {
@@ -85,13 +89,13 @@ extern "C" void dtw_windowed(//void * seq1posv, void * seq2posv,
     clock_t tic = std::clock();
     window = MAX(window, abs(seq1_len - seq2_len) + 1);
     //MatrixXf distance_mat = MatrixXf::Constant(seq1_len, seq2_len, INFINITY);
-    ExternNDArray distmat_out((float*)distmat_outv, seq1_len, seq2_len);
+    ExternNDArrayf distmat_out((float*)distmat_outv, seq1_len, seq2_len);
     //distance_mat(0,0) = 0;
-    //ExternNDArray seq1pos((float*)seq1posv ,seq1_len,2);
-    ExternNDArray seq1curv((float*)seq1curvv ,seq1_len,2);
+    //ExternNDArrayf seq1pos((float*)seq1posv ,seq1_len,2);
+    ExternNDArrayf seq1curv((float*)seq1curvv ,seq1_len,2);
 
-    //ExternNDArray seq2pos((float*)seq2posv ,seq2_len,2);
-    ExternNDArray seq2curv((float*)seq2curvv ,seq2_len,2);
+    //ExternNDArrayf seq2pos((float*)seq2posv ,seq2_len,2);
+    ExternNDArrayf seq2curv((float*)seq2curvv ,seq2_len,2);
 
     dtw(seq1curv, seq2curv, distmat_out, window);
    
@@ -135,7 +139,7 @@ float norm_minmax(float max, float min, float x) {
 
 float dist_func(const Array<float, 1, 2> & pos1, const Array<float, 1, 2> & pos2,
                 const ArrayXf & curv1, const ArrayXf & curv2,
-                const ExternNDArray & curv_hist_weights, float alpha,
+                const ExternNDArrayf & curv_hist_weights, float alpha,
                 float eucl_max, float eucl_min
                 ) {
     // alpha*(norm(pos1, pos2)) + (1-alpha)*(norm(elemwisemul(curv_hist_weights, curv1), elemwisemul(curv_hist_weights, curv2)))
@@ -152,16 +156,16 @@ extern "C" void dtw_hybrid(void * seq1curvv, void* seq2curvv,
                            float alpha, void * distmat_outv) {
 
     window = MAX(window, abs(seq1_len - seq2_len) + 1);
-    ExternNDArray distmat_out((float*)distmat_outv, seq1_len, seq2_len);
+    ExternNDArrayf distmat_out((float*)distmat_outv, seq1_len, seq2_len);
 
-    ExternNDArray seq1pos((float*)seq1posv, seq1_len, 2);
-    ExternNDArray seq2pos((float*)seq2posv, seq2_len, 2);
+    ExternNDArrayf seq1pos((float*)seq1posv, seq1_len, 2);
+    ExternNDArrayf seq2pos((float*)seq2posv, seq2_len, 2);
 
-    ExternNDArray seq1curv((float*)seq1curvv, seq1_len, curv_hist_size);
-    ExternNDArray seq2curv((float*)seq2curvv, seq2_len, curv_hist_size);
+    ExternNDArrayf seq1curv((float*)seq1curvv, seq1_len, curv_hist_size);
+    ExternNDArrayf seq2curv((float*)seq2curvv, seq2_len, curv_hist_size);
 
 
-    ExternNDArray curv_hist_weights((float*)curv_hist_weightsv, curv_hist_size, 1);
+    ExternNDArrayf curv_hist_weights((float*)curv_hist_weightsv, curv_hist_size, 1);
 
     int dist_counter = 0;
     std::clock_t dist_tocs = 0;
@@ -207,3 +211,29 @@ extern "C" void dtw_hybrid(void * seq1curvv, void* seq2curvv,
     //printf("%0.10f seconds (on avg) for %d distances\n", (dist_tocs / (double)dist_counter / (double)CLOCKS_PER_SEC), dist_counter);
 }
 
+extern "C" void block_curvature(void * summed_area_tabv, int binarized_rows, int binarized_cols,
+                                void * seq_posv, int seq_len, 
+                                int curvature_size, void * curvature_vecv) {
+
+    ExternNDArrayf summed_area_tab((float*)summed_area_tabv, binarized_rows, binarized_cols);
+    ExternNDArrayi seq_pos((int*)seq_posv, seq_len, 2);
+    ExternNDArrayf curvature_vec((float*)curvature_vecv, seq_len, 1);
+    float area = std::pow((float)curvature_size,2.0);
+
+    for (int ind = 0; ind < seq_len; ind++) {
+        // assume y, x
+        int i = seq_pos(ind, 0);
+        int j = seq_pos(ind, 1);
+        int starti = MAX(0, i - (curvature_size / 2));
+        int startj = MAX(0, j - (curvature_size / 2));
+        int endi = MIN(binarized_rows - 1, i + (curvature_size / 2));
+        int endj = MIN(binarized_cols - 1, j + (curvature_size / 2));
+        //printf("i %d\n j %d\n", i, j);
+        //printf("starti %d\nstartj %d\nendi %d\nendj %d\n", starti, startj, endi, endj);
+        float this_summed_area = (float)(summed_area_tab(starti, startj) + summed_area_tab(endi, endj) -
+                            (summed_area_tab(starti, endj) + summed_area_tab(endi, startj)));
+        this_summed_area /= area; // may be a little wrong on the edges, but we shouldn't need to worry about that
+        //printf("Point (%d, %d) has curvature %0.2f at size %d\n", i, j, this_summed_area, curvature_size);
+        curvature_vec(ind) = this_summed_area; 
+    }
+}
