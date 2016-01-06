@@ -1,4 +1,5 @@
-from __future__ import division
+from __future__ import division, print_function
+
 import numpy as np
 import time
 import ctypes
@@ -49,6 +50,7 @@ lib = ctypes.cdll.LoadLibrary('./icp_ctypes_cpp/ctypes_icp.so')
 dtw_dist = lib.dtw_windowed
 dtw_scalar = lib.dtw_scalar
 dtw_hybrid = lib.dtw_hybrid
+dtw_curvweighted = lib.dtw_curvweighted
 block_curv = lib.block_curvature
 
 def block_integral_curvatures_cpp(sizes, coords):
@@ -94,6 +96,24 @@ def get_dist_mat_hybrid(query_pos, query_curv, db_pos, db_curv, curv_weights, al
                ctypes.c_int(query_len), ctypes.c_int(db_len), ctypes.c_int(window),
                ctypes.c_int(curv_weights_nd.shape[0]), ctypes.c_void_p(curv_weights_nd.ctypes.data),
                ctypes.c_float(alpha), ctypes.c_void_p(distance_mat.ctypes.data))
+    return distance_mat.reshape(query_len, db_len)
+
+def get_dist_mat_curvweighted(query_curv, db_curv, curv_weights, window=50):
+    ordered_sizes = sorted(curv_weights.keys())
+    # we just need to stack the curvatures and make sure that the ordering is consistent w/curv_weights
+    curv_weights_nd = np.array([curv_weights[i] for i in ordered_sizes],dtype=np.float32)
+    query_curv_nd = np.hstack([np.array(query_curv[i],dtype=np.float32).reshape(-1,1) for i in ordered_sizes])
+    db_curv_nd = np.hstack([np.array(db_curv[i],dtype=np.float32).reshape(-1,1) for i in ordered_sizes])
+
+    query_len = query_curv_nd.shape[0]
+    db_len = db_curv_nd.shape[0]
+    distance_mat = (np.zeros((query_len, db_len), dtype=np.float32) + np.inf).flatten()
+    distance_mat[0] = 0
+    dtw_curvweighted(
+               ctypes.c_void_p(query_curv_nd.ctypes.data), ctypes.c_void_p(db_curv_nd.ctypes.data),
+               ctypes.c_int(query_len), ctypes.c_int(db_len), ctypes.c_int(window),
+               ctypes.c_int(curv_weights_nd.shape[0]), ctypes.c_void_p(curv_weights_nd.ctypes.data),
+               ctypes.c_void_p(distance_mat.ctypes.data))
     return distance_mat.reshape(query_len, db_len)
 
 
@@ -160,6 +180,63 @@ def triplet_eval(curvatures, dist_method, compare_on, n_triplets=200, verbose=Fa
             good_count += 1
 
     return good_count / float(n_triplets)
+
+def rank_eval(curvatures, dist_method, compare_on, k=5, verbose=False, sample_size=None):
+    found_ins = [0]*(k+1)
+    tic = time.time()
+    hist = {}
+    for c in curvatures:
+        if c['id'] not in hist:
+            hist[c['id']] = 1
+        else:
+            hist[c['id']] += 1
+    bad_ids = set(filter(lambda x: hist[x] == 1, hist.keys()))
+    random.shuffle(curvatures)
+    if sample_size is None:
+        upto = len(curvatures)
+    else:
+        upto = sample_size
+    results = []
+    for qimg in ut.ProgressIter(range(upto), lbl='QueryImage', enabled=(verbose > 0)):
+        if curvatures[qimg]['id'] in bad_ids:
+            continue
+        db = [c for ind, c in enumerate(curvatures) if ind != qimg]
+        #db = curvatures
+        dists = {}
+        eval_tic = time.time()
+        for db_c in ut.ProgressIter(db, lbl='dist', enabled=(verbose > 1)):
+            single_tic = time.time()
+            distance = dist_method(curvatures[qimg], db_c, compare_on=compare_on)
+            if db_c['id'] not in dists:
+                dists[db_c['id']] = {db_c['fn']:distance}
+            else:
+                dists[db_c['id']][db_c['fn']] = distance
+            single_toc = time.time() - single_tic
+            #if verbose > 1:
+            #    print(single_toc)
+        results.append({'id':curvatures[qimg]['id'],
+                        'fn':curvatures[qimg]['fn'],
+                        'dists':dists,})
+
+        id_dists = {crcid:np.average(dists[crcid].values()) for crcid in dists}
+        #print(dists[curvatures[qimg]['id']])
+        top_k = sorted(id_dists.keys(),key=lambda x: id_dists[x])[:k]
+        try:
+            found_k = top_k.index(curvatures[qimg]['id'])
+        except ValueError:
+            found_k = -1
+        if verbose > 0:
+            print("Average distance for correct id: %0.2f, giving k=%d" % (id_dists[curvatures[qimg]['id']],
+                                                                           found_k))
+            print("Distance for k=0: %0.2f" % id_dists[top_k[0]])
+        found_ins[found_k] += 1
+        eval_toc = time.time() - eval_tic
+        #if verbose > 0:
+        #    print("Took %0.2f seconds to evaluate image %d" % (eval_toc, qimg))
+    toc = time.time() - tic
+    print("Took %0.2f seconds" % toc)
+    found_ins = [f_in / upto for f_in in found_ins]
+    return found_ins, results
 
 if __name__ == "__main__":
 

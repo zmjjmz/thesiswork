@@ -211,6 +211,30 @@ extern "C" void dtw_hybrid(void * seq1curvv, void* seq2curvv,
     //printf("%0.10f seconds (on avg) for %d distances\n", (dist_tocs / (double)dist_counter / (double)CLOCKS_PER_SEC), dist_counter);
 }
 
+extern "C" void dtw_curvweighted(void * seq1curvv, void* seq2curvv,
+                                 int seq1_len, int seq2_len, int window,
+                                 int curv_hist_size, void * curv_hist_weightsv,
+                                 void * distmat_outv) {
+
+    window = MAX(window, abs(seq1_len - seq2_len) + 1);
+    ExternNDArrayf distmat_out((float*)distmat_outv, seq1_len, seq2_len);
+    ExternNDArrayf seq1curv((float*)seq1curvv, seq1_len, curv_hist_size);
+    ExternNDArrayf seq2curv((float*)seq2curvv, seq2_len, curv_hist_size);
+
+
+    ExternNDArrayf curv_hist_weights((float*)curv_hist_weightsv, curv_hist_size, 1);
+
+    float dist;
+    for (int i = 1; i < seq1_len; i++) {
+        for (int j = MAX(1, i - window); j < MIN(seq2_len, i + window); j++) {
+            dist = ((seq1curv.row(i).array() * curv_hist_weights.transpose().array()) - 
+                    (seq2curv.row(j).array() * curv_hist_weights.transpose().array())).matrix().norm();
+            distmat_out(i,j) = dist + MIN(distmat_out(i, j-1), 
+                                        MIN(distmat_out(i-1, j),
+                                            distmat_out(i-1, j-1)));
+        }
+    }
+}
 extern "C" void block_curvature(void * summed_area_tabv, int binarized_rows, int binarized_cols,
                                 void * seq_posv, int seq_len, 
                                 int curvature_size, void * curvature_vecv) {
