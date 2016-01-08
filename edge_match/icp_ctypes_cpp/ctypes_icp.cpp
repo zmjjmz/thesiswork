@@ -280,7 +280,7 @@ extern "C" float find_trailing_edge(float * gradient_imgv, int gradient_rows, in
     /* Assume the gradient image is all setup, initialize cost and back */
 
     VectorXi neighbor_range(n_neighbors);
-    //printf("Building neighbor range\n");
+    printf("Building neighbor range\n");
     for (struct {int ind; int neighbor;} N = {0, (-1 * n_neighbors / 2)};
          N.neighbor<(n_neighbors / 2) + 1;
          N.neighbor++, N.ind++) {
@@ -289,11 +289,11 @@ extern "C" float find_trailing_edge(float * gradient_imgv, int gradient_rows, in
     MatrixXf cost = MatrixXf::Zero(gradient_rows, gradient_cols);
     MatrixXi back = MatrixXi::Zero(gradient_rows, gradient_cols);
     
-    //printf("Looping over image\n");
+    printf("Looping over image\n");
     for (int col = startcol; col <= endcol; col++) {
         for (int row = 0; row < gradient_rows; row++) {
             // argmin over candidates
-            int best_candidate = n_neighbors / 2; // middle
+            int best_candidate = 0; // middle
             float best_cand_cost = INFINITY;
             for (int i=0; i < neighbor_range.rows(); i++) {
                 float cand_cost = get_te_cost(row, col, neighbor_range(i, 0), cost, gradient_img);
@@ -312,7 +312,7 @@ extern "C" float find_trailing_edge(float * gradient_imgv, int gradient_rows, in
     // One column at a time, we know how big the path will be ahead of time, which is very helpful
     int curr_row = endrow;
     float total_cost = 0;
-    //printf("Reconstructing the optimal path\n");
+    printf("Reconstructing the optimal path\n");
     for (struct {int ind; int col;} P = {0, endcol}; 
          P.col > startcol; P.col--, P.ind++) {
         total_cost += cost(curr_row, P.col);
