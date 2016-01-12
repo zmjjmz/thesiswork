@@ -263,10 +263,10 @@ extern "C" void block_curvature(void * summed_area_tabv, int binarized_rows, int
 }
 
 float get_te_cost(int row, int col, int i, const MatrixXf & cost, const ExternNDArrayf & gradient_img) {
-    if ((row + i < 0) || (row + i >= cost.rows()) || (col == 0)) {
+    if ((row + i < 0) || (row + i >= cost.rows())) {
         return INFINITY;
     } else {
-        return cost(row+i, col-1) + gradient_img(row, col);
+        return (col == 0 ? 0 : cost(row+i, col-1)) + gradient_img(row, col);
     }
 }
 
@@ -274,31 +274,33 @@ float get_te_cost(int row, int col, int i, const MatrixXf & cost, const ExternND
 
 extern "C" float find_trailing_edge(float * gradient_imgv, int gradient_rows, int gradient_cols,
                                    int startcol, int endrow, int endcol,
-                                   int n_neighbors, int * outpathv) {
+                                   int n_neighbors, int * outpathv, float * cost_mat) {
     ExternNDArrayf gradient_img(gradient_imgv, gradient_rows, gradient_cols);
     ExternNDArrayi outpath(outpathv, endcol - startcol, 2);
     /* Assume the gradient image is all setup, initialize cost and back */
+    printf("End point gradient: %0.2f\n", gradient_img(endrow, endcol));
 
     VectorXi neighbor_range(n_neighbors);
-    printf("Building neighbor range\n");
+    //printf("Building neighbor range\n");
     for (struct {int ind; int neighbor;} N = {0, (-1 * n_neighbors / 2)};
          N.neighbor<(n_neighbors / 2) + 1;
          N.neighbor++, N.ind++) {
-        neighbor_range(N.ind,0) = N.neighbor;
+        neighbor_range(N.ind) = N.neighbor;
     }
     MatrixXf cost = MatrixXf::Zero(gradient_rows, gradient_cols);
+    //ExternNDArrayf cost(cost_mat, gradient_rows, gradient_cols);
     MatrixXi back = MatrixXi::Zero(gradient_rows, gradient_cols);
     
-    printf("Looping over image\n");
+    //printf("Looping over image\n");
     for (int col = startcol; col <= endcol; col++) {
         for (int row = 0; row < gradient_rows; row++) {
             // argmin over candidates
-            int best_candidate = 0; // middle
+            int best_candidate = 0; // no travel in y-axis
             float best_cand_cost = INFINITY;
             for (int i=0; i < neighbor_range.rows(); i++) {
-                float cand_cost = get_te_cost(row, col, neighbor_range(i, 0), cost, gradient_img);
+                float cand_cost = get_te_cost(row, col, neighbor_range(i), cost, gradient_img);
                 if (cand_cost < best_cand_cost) {
-                    best_candidate = neighbor_range(i, 0);
+                    best_candidate = neighbor_range(i);
                     best_cand_cost = cand_cost;
                 }
             }
@@ -312,16 +314,18 @@ extern "C" float find_trailing_edge(float * gradient_imgv, int gradient_rows, in
     // One column at a time, we know how big the path will be ahead of time, which is very helpful
     int curr_row = endrow;
     float total_cost = 0;
-    printf("Reconstructing the optimal path\n");
+    //printf("Reconstructing the optimal path\n");
     for (struct {int ind; int col;} P = {0, endcol}; 
          P.col > startcol; P.col--, P.ind++) {
+        //printf("%d\n", curr_row);
         total_cost += cost(curr_row, P.col);
         // x, y
         outpath(P.ind, 0) = P.col;
         outpath(P.ind, 1) = curr_row;
 
-        curr_row = curr_row + back(curr_row, P.col);
+        curr_row = MIN(MAX(0, curr_row + back(curr_row, P.col)),cost.rows()-1);
     }
+    //printf("Cost incurred on optimal path: %0.2f\n", total_cost);
 
     return total_cost;
 
