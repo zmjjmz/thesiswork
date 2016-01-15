@@ -242,18 +242,18 @@ def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x,
     print("Gadient nonzeros:\t%s" % grad_nzs[0]) # this shouldn't change
     avg_train_loss = np.mean(train_losses)
     avg_train_reg_loss = np.mean(train_reg_losses)
-    avg_train_acc = np.mean(train_accs)
+    avg_train_acc = np.mean(np.vstack(train_accs),axis=0)
 
     valid_losses = []
     for batch_ind in range(nbatch_valid):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
-        batch_valid_loss, batch_valid_acc = iteration_funcs['valid'](*[batch_loader(dataset['valid'][section][batch_slice], section)
+        batch_valid_loss, batch_valid_acc, _ = iteration_funcs['valid'](*[batch_loader(dataset['valid'][section][batch_slice], section)
             for section in filter(lambda x: x in dataset['valid'], sections)])
         valid_losses.append(batch_valid_loss)
         valid_accs.append(batch_valid_acc)
 
     avg_valid_loss = np.mean(valid_losses)
-    avg_valid_acc = np.mean(valid_accs)
+    avg_valid_acc = np.mean(np.vstack(valid_accs),axis=0)
 
     return {'train_loss':avg_train_loss,
             'train_reg_loss':avg_train_reg_loss,
