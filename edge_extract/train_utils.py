@@ -247,7 +247,7 @@ def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x,
     valid_losses = []
     for batch_ind in range(nbatch_valid):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
-        batch_valid_loss, batch_valid_acc, _ = iteration_funcs['valid'](*[batch_loader(dataset['valid'][section][batch_slice], section)
+        batch_valid_loss, batch_valid_acc = iteration_funcs['valid'](*[batch_loader(dataset['valid'][section][batch_slice], section)
             for section in filter(lambda x: x in dataset['valid'], sections)])
         valid_losses.append(batch_valid_loss)
         valid_accs.append(batch_valid_acc)
@@ -275,9 +275,9 @@ def parameter_analysis(layer):
     for param in all_params:
         print(param.shape)
         nneg_w = np.count_nonzero(param < 0) / np.product(param.shape)
-        normed_norm = np.linalg.norm(param) / np.product(param.shape)
+        normed_norm = np.linalg.norm(param)# / np.product(param.shape)
         print("Number of negative weights: %0.2f" % nneg_w)
-        print("Weight norm (normalized by size): %0.10f" % normed_norm)
+        print("Weight norm: %0.5f" % normed_norm)
 
 def build_vgg16_seg():
     net = {}
@@ -394,6 +394,7 @@ def display_losses(losses, n_epochs, batch_size, train_size, fn='losses.png'):
     import matplotlib.pyplot as plt
     ax = plt.subplot()
     batches_per_epoch = train_size // batch_size
+    ax.set_yscale('log')
     ax.scatter(range(n_epochs*batches_per_epoch), losses['batch'], color='g')
     ax.scatter([i*batches_per_epoch for i in range(n_epochs)], losses['epoch'], color='r', s=10.)
     plt.savefig(fn)
