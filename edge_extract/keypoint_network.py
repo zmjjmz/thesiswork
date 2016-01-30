@@ -21,6 +21,7 @@ from lasagne.init import Orthogonal, Constant
 from lasagne.regularization import l2, regularize_network_params
 import theano.tensor as T
 import theano
+from da import transform
 
 from train_utils import (
         ResponseNormalizationLayer,
@@ -56,16 +57,19 @@ def build_kpextractor64():
     bn3 = ll.BatchNormLayer(mp3)
     conv4 = ll.Conv2DLayer(bn3, num_filters=64, filter_size=filter3, pad=same_pad3, W=Orthogonal(), nonlinearity=rectify, name='conv4')
     # larger max pool to reduce parameters in the FC layer
-    mp4 = ll.MaxPool2DLayer(conv4, 4, stride=4) # now down to 2x2
+    mp4 = ll.MaxPool2DLayer(conv4, 2, stride=2) # now down to 4x4
     bn4 = ll.BatchNormLayer(mp4)
+    conv5 = ll.Conv2DLayer(bn4, num_filters=128, filter_size=filter3, pad=same_pad3, W=Orthogonal(), nonlinearity=rectify, name='conv5')
+    mp5 = ll.MaxPool2DLayer(conv5, 2, stride=2) # down to 2x2
+    bn5 = ll.BatchNormLayer(mp5)
     # now let's bring it down to a FC layer that takes in the 2x2x64 mp4 output
-    fc1 = ll.DenseLayer(bn4, num_units=128, nonlinearity=rectify)
-    bn5 = ll.BatchNormLayer(fc1)
+    fc1 = ll.DenseLayer(bn5, num_units=128, nonlinearity=rectify)
+    bn6 = ll.BatchNormLayer(fc1)
     #dp1 = ll.DropoutLayer(bn1, p=0.5)
-    fc2 = ll.DenseLayer(bn5, num_units=64, nonlinearity=rectify)
+    fc2 = ll.DenseLayer(bn6, num_units=64, nonlinearity=rectify)
     #dp2 = ll.DropoutLayer(fc2, p=0.5)
-    bn6 = ll.BatchNormLayer(fc2)
-    out = ll.DenseLayer(bn6, num_units=6, nonlinearity=linear)
+    bn7 = ll.BatchNormLayer(fc2)
+    out = ll.DenseLayer(bn7, num_units=6, nonlinearity=linear)
     out_rs = ll.ReshapeLayer(out, ([0], 3, 2))
 
     return out_rs
@@ -76,36 +80,47 @@ def preproc_dataset(dataset):
 
     imgs = np.expand_dims(dataset[0].astype(np.float32),axis=1) # add fake channel axis to greyscaled images
     imgs_T = np.transpose(imgs,axes=(0,1,3,2)) # the most insane thing I've done
+    #print(imgs_T[0])
 
     img_shape = imgs_T.shape[-2:]
     # assume img_shape is y, x
 
-    # scale the points
+    # scale the points to 0, 1
+    # 'true' points are already rescaled to the given image shape
     pts = dataset[1].astype(np.float32)
     scale_mat = np.array([img_shape[1], img_shape[0]] * pts.shape[1], dtype=np.float32).reshape(pts.shape[1], 2)
-    pts_scaled = (pts - scale_mat / 2) / (scale_mat / 2)
+    pts_scaled = (pts) / (scale_mat)
+    #print(pts_scaled)
 
-    return shuffle_dataset({'X':imgs_T, 'y':pts})
+    # extract the original image sizes given that they're paired with the image names
+    sizes = np.stack(dataset[2][:,0],axis=0).astype(np.float32)[:,:2]
+
+    return shuffle_dataset({'X':imgs_T, 'y':pts_scaled, 'extra':sizes, 'names':list(dataset[2][:,1])})
 
 
 
 def loss_iter(kpextractor, update_params={}):
     X = T.tensor4()
     y = T.tensor3() # first axis is batch axis, second is point axis (left, right, notch) third is x, y
+    sizes = T.matrix() # first axis is batch, then y, x
+    #itr = T.scalar()
 
     all_layers = ll.get_all_layers(kpextractor)
     imwrite_architecture(all_layers, './layer_rep_kpext.png')
     predicted_points_train = ll.get_output(kpextractor, X)
     predicted_points_valid = ll.get_output(kpextractor, X, deterministic=True)
 
-    rmse = lambda pred: T.sqrt(T.mean((pred - y)**2, axis=(1,2)))
-    eucl = lambda pred: T.mean((pred - y).norm(2, axis=2), axis=1)
+    # originally had another multiplicative factor: alpha, but this can be worked into the lr
+    rmse = lambda pred, true: T.sqrt(T.mean((pred - true)**2, axis=(1,2)))
+    eucl = lambda pred, true: T.mean((pred - true).norm(2, axis=2), axis=1)
+    scaler = T.extra_ops.repeat(sizes[:,np.newaxis,:], 3, axis=1)[:,:,::-1]
+    scaled_cost = lambda pred, alpha: eucl(pred*scaler*alpha, y*scaler*alpha)
 
     # experiment: penalize the difference between the avg std of the output over the batch
     # and the avg std of the true points over the batch
     std_diff = lambda pred: T.sqrt(T.mean((T.std(pred,axis=0) - T.std(y,axis=0))**2))
-    losses = lambda pred: T.mean(eucl(pred))
-    decay = 1e-3
+    losses = lambda pred: T.mean(scaled_cost(pred, 0.001))
+    decay = 1e-4
     reg = regularize_network_params(kpextractor, l2) * decay
 
     #predT_p = theano.printing.Print()(T.mean(predicted_points_train,axis=0))
@@ -114,24 +129,25 @@ def loss_iter(kpextractor, update_params={}):
     loss_train.name = 'scaled_rmse' # assuming that the y values are scaled to -1, 1
     all_params = ll.get_all_params(kpextractor, trainable=True)
     grads = T.grad(loss_train, all_params, add_names=True)
-    #updates = adam(grads, all_params, **update_params)
-    updates = adam(grads, all_params, **update_params)
 
-    # calculate and report average pixel distance
-    sizey, sizex = all_layers[0].shape[-2:]
-    scale_vec = np.array([sizex, sizey]*3).reshape(3,2)
-    scaled_y = (y * scale_vec + scale_vec) / 2
-    scaled_pred = lambda pred: (pred * scale_vec + scale_vec) / 2
-    #avg_pix_dist = lambda pred: T.mean((scaled_pred(pred) - scaled_y).norm(2, axis=2),axis=0)
-    avg_pix_dist = lambda pred: T.mean((pred - y).norm(2, axis=2),axis=0)
+    updates = nesterov_momentum(grads, all_params, update_params['l_r'], momentum=update_params['momentum'])
+    #updates[update_params['l_r']] = update_params['l_r'] * 0.999
+    #updates = adam(grads, all_params)
+
+    # calculate and report average pixel distance in the real image
+    #sizey, sizex = all_layers[0].shape[2:]
+    #scale_denom = np.array([sizex, sizey]*3,dtype=np.float32).reshape(3,2)
+    #scale_num = T.extra_ops.repeat(sizes[:,np.newaxis,:], 3, axis=1)[:,:,::-1]
+    #scale_true = (scale_num / scale_denom)
+    avg_pix_dist = lambda pred, alpha: T.mean((pred*scaler*alpha - y*scaler*alpha).norm(2, axis=2),axis=0)
 
 
-    pix_dist_train = avg_pix_dist(predicted_points_train)
-    pix_dist_valid = avg_pix_dist(predicted_points_valid)
+    pix_dist_train = avg_pix_dist(predicted_points_train, 1)
+    pix_dist_valid = avg_pix_dist(predicted_points_valid, 1)
 
     print("Compiling network for training")
     tic = time.time()
-    train_iter = theano.function([X, y], [loss_train,
+    train_iter = theano.function([X, y, sizes], [loss_train,
                                           losses(predicted_points_train),
                                           pix_dist_train] + grads, updates=updates)
     toc = time.time() - tic
@@ -139,12 +155,19 @@ def loss_iter(kpextractor, update_params={}):
     #theano.printing.pydotprint(loss, outfile='./loss_graph.png',var_with_name_simple=True)
     print("Compiling network for validation")
     tic = time.time()
-    valid_iter = theano.function([X, y], [losses(predicted_points_valid),
+    valid_iter = theano.function([X, y, sizes], [losses(predicted_points_valid),
                                           pix_dist_valid])
     toc = time.time() - tic
     print("Took %0.2f seconds" % toc)
 
     return {'train':train_iter, 'valid':valid_iter, 'gradnames':[g.name for g in grads]}
+
+def augmenting_batch_loader(dataset, bslice, sec):
+    if sec != 'train':
+        return [dataset[s][bslice] for s in ['X','y','extra']]
+    else:
+        t = transform(dataset['X'][bslice], dataset['y'][bslice], transform_y=True)
+        return [t[0], t[1], dataset['extra'][bslice]]
 
 if __name__ == "__main__":
     parser = OptionParser()
@@ -167,7 +190,7 @@ if __name__ == "__main__":
     batch_size = options.batch_size
     print("Loading dataset")
     tic = time.time()
-    dset = load_dataset(join(dataset_loc, "Flukes/kpts/%s" % dset_name), normalize_method='meansub')
+    dset = load_dataset(join(dataset_loc, "Flukes/kpts/%s" % dset_name), normalize_method='zscore')
     dset = {section:preproc_dataset(dset[section]) for section in ['train', 'valid', 'test']}
     # load_dataset normalizes
     toc = time.time() - tic
@@ -180,18 +203,21 @@ if __name__ == "__main__":
             params = pickle.load(f)
         ll.set_all_param_values(kp_extractor, params)
     #iter_funcs = loss_iter(kp_extractor, update_params={'learning_rate':.01})
-    iter_funcs = loss_iter(kp_extractor, update_params={})
+    lr = theano.shared(np.array(0.010, dtype=np.float32))
+    momentum_params = {'l_r':lr, 'momentum':0.9}
+    iter_funcs = loss_iter(kp_extractor, update_params=momentum_params)
     best_params = ll.get_all_param_values(kp_extractor)
     best_val_loss = np.inf
     for epoch in range(n_epochs):
         tic = time.time()
         print("Epoch %d" % (epoch))
-        loss = train_epoch(iter_funcs, dset, batch_size=batch_size)
+        loss = train_epoch(iter_funcs, dset, batch_size, augmenting_batch_loader)
         epoch_losses.append(loss['train_loss'])
         batch_losses.append(loss['all_train_loss'])
         # shuffle training set
         dset['train'] = shuffle_dataset(dset['train'])
         toc = time.time() - tic
+        print("Learning rate: %0.5f" % momentum_params['l_r'].get_value())
         print("Train loss (reg): %0.3f\nTrain loss: %0.3f\nValid loss: %0.3f" %
                 (loss['train_reg_loss'],loss['train_loss'],loss['valid_loss']))
         print("Train Pixel Dist: %s\nValid Pixel Dist: %s" % (loss['train_acc'], loss['valid_acc']))

@@ -122,9 +122,9 @@ def load_dataset(dataset_path, normalize_method='zscore'):
         dset['mean'] = mean
         dset['std'] = std
     if normalize_method == 'zscore':
-        normalize = lambda x: (normalize_patch(x[0], mean=dset['mean'], std=dset['std']), x[1])
+        normalize = lambda x: (normalize_patch(x[0], mean=dset['mean'], std=dset['std']),) + (x[1:])
     elif normalize_method == 'meansub':
-        normalize = lambda x: (x[0].astype(np.float32) - dset['mean'], x[1])
+        normalize = lambda x: (x[0].astype(np.float32) - dset['mean'],) + (x[1:])
     elif normalize_method is None:
         normalize = lambda x: x
     with open(join(dataset_path, 'train.pkl'),'r') as f:
@@ -205,10 +205,9 @@ def check_for_dupes(idmap):
                 if is_equal(patchset1, patchset2):
                     print("%s has a duplicate image in %s's imageset" % (q_indv, d_indv))
 
-def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x, sec: x)):
+def train_epoch(iteration_funcs, dataset, batch_size, batch_loader):
     nbatch_train = (dataset['train']['y'].shape[0] // batch_size)
     nbatch_valid = (dataset['valid']['y'].shape[0] // batch_size)
-    sections = ['X','y','pixelw'] # think of this as an ordering over the args for one of the loss_iter functions
     train_losses = []
     train_reg_losses = []
 
@@ -221,8 +220,7 @@ def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x,
     for batch_ind in range(nbatch_train):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
         # this takes care of the updates as well
-        bloss_grads = iteration_funcs['train'](*[batch_loader(dataset['train'][section][batch_slice], section)
-            for section in filter(lambda x: x in dataset['train'], sections)])
+        bloss_grads = iteration_funcs['train'](*batch_loader(dataset['train'], batch_slice, 'train'))
 
         batch_train_loss_reg = bloss_grads.pop(0)
         batch_train_loss = bloss_grads.pop(0)
@@ -247,8 +245,7 @@ def train_epoch(iteration_funcs, dataset, batch_size=32, batch_loader=(lambda x,
     valid_losses = []
     for batch_ind in range(nbatch_valid):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
-        batch_valid_loss, batch_valid_acc = iteration_funcs['valid'](*[batch_loader(dataset['valid'][section][batch_slice], section)
-            for section in filter(lambda x: x in dataset['valid'], sections)])
+        batch_valid_loss, batch_valid_acc = iteration_funcs['valid'](*batch_loader(dataset['train'], batch_slice, 'train'))
         valid_losses.append(batch_valid_loss)
         valid_accs.append(batch_valid_acc)
 
