@@ -153,7 +153,8 @@ def transform_batch(Xb, yb, params, transform_y=False):
             # stack a ones vector to the points given
             coords_M = np.vstack([M,np.array([0,0,1],dtype=np.float32).reshape(1,-1)])
             yb_homog = np.hstack([ybc[i],np.ones((ybc[i].shape[0],1))])
-            ybc[i] = np.dot(yb_homog,coords_M)[:,:-1] # take off the homog part
+            transformed = np.dot(coords_M,yb_homog.T).T # take off the homog part
+            ybc[i] = transformed[:,:-1]
 
     if transform_y:
         return Xbc, ybc
@@ -165,8 +166,8 @@ def transform(X, y, transform_y=False):
     params = {
         'allow_rotation': False,
         #'allow_rotation': True,
-        'min_offset': -20,
-        'max_offset':  20,
+        'min_offset': -0.2,
+        'max_offset':  0.2,
         'min_scale': 1,
         'max_scale': 1,
         #'min_scale': 1 / 1.6,
@@ -179,8 +180,8 @@ def transform(X, y, transform_y=False):
         'max_stretch': 1,
         #'min_stretch': 1 / 1.3,
         #'max_stretch':     1.3,
-        'flip_horizontal': 1,
-        'flip_vertical': 1,
+        'flip_horizontal': 0.5,
+        'flip_vertical': 0.5,
         #'flip_horizontal': 0.5,
         #'flip_vertical': 0.5,
     }

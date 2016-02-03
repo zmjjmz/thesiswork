@@ -208,29 +208,21 @@ def check_for_dupes(idmap):
 def train_epoch(iteration_funcs, dataset, batch_size, batch_loader):
     nbatch_train = (dataset['train']['y'].shape[0] // batch_size)
     nbatch_valid = (dataset['valid']['y'].shape[0] // batch_size)
-    train_losses = []
-    train_reg_losses = []
-
-    train_accs = []
-    valid_accs = []
-
     grad_mags = []
     grad_means = []
     grad_nzs = []
+    # train
+    during_train_losses = []
     for batch_ind in range(nbatch_train):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
         # this takes care of the updates as well
         bloss_grads = iteration_funcs['train'](*batch_loader(dataset['train'], batch_slice, 'train'))
 
         batch_train_loss_reg = bloss_grads.pop(0)
-        batch_train_loss = bloss_grads.pop(0)
-        batch_train_acc = bloss_grads.pop(0)
+        during_train_losses.append(batch_train_loss_reg)
         grad_mags.append([np.linalg.norm(grad) for grad in bloss_grads])
         grad_means.append([np.mean(np.abs(grad)) for grad in bloss_grads])
         grad_nzs.append([np.count_nonzero(grad) for grad in bloss_grads])
-        train_reg_losses.append(batch_train_loss_reg)
-        train_losses.append(batch_train_loss)
-        train_accs.append(batch_train_acc)
 
     avg_grad_mags = np.average(np.array(grad_mags), axis=0)
     avg_grad_means = np.average(np.array(grad_means), axis=0)
@@ -238,26 +230,46 @@ def train_epoch(iteration_funcs, dataset, batch_size, batch_loader):
     print("Gradient magnitudes:\t%s" % avg_grad_mags)
     print("Gradient means:\t%s" % avg_grad_means)
     print("Gadient nonzeros:\t%s" % grad_nzs[0]) # this shouldn't change
+    train_losses = []
+    train_reg_losses = []
+    train_accs = []
+
+    # get error on training set
+    for batch_ind in range(nbatch_train):
+        batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
+        batch_train_loss, batch_train_loss_reg, batch_train_acc = iteration_funcs['valid'](*batch_loader(dataset['train'], batch_slice, 'train'))
+        train_reg_losses.append(batch_train_loss_reg)
+        train_losses.append(batch_train_loss)
+        train_accs.append(batch_train_acc)
+
     avg_train_loss = np.mean(train_losses)
     avg_train_reg_loss = np.mean(train_reg_losses)
     avg_train_acc = np.mean(np.vstack(train_accs),axis=0)
 
+
     valid_losses = []
+    valid_reg_losses = []
+    valid_accs = []
+
+    # get error on validation set
     for batch_ind in range(nbatch_valid):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
-        batch_valid_loss, batch_valid_acc = iteration_funcs['valid'](*batch_loader(dataset['train'], batch_slice, 'train'))
+        batch_valid_loss, batch_valid_loss_reg, batch_valid_acc = iteration_funcs['valid'](*batch_loader(dataset['valid'], batch_slice, 'valid'))
+        valid_reg_losses.append(batch_valid_loss_reg)
         valid_losses.append(batch_valid_loss)
         valid_accs.append(batch_valid_acc)
 
     avg_valid_loss = np.mean(valid_losses)
+    avg_valid_reg_loss = np.mean(valid_reg_losses)
     avg_valid_acc = np.mean(np.vstack(valid_accs),axis=0)
 
     return {'train_loss':avg_train_loss,
             'train_reg_loss':avg_train_reg_loss,
             'valid_loss':avg_valid_loss,
+            'valid_reg_loss':avg_valid_reg_loss,
             'train_acc':avg_train_acc,
             'valid_acc':avg_valid_acc,
-            'all_train_loss':train_losses}
+            'all_train_loss':during_train_losses}
 
 def load_whole_image(imgs_dir, img, img_shape=None):
     # imgs_dir should be the absolute path
