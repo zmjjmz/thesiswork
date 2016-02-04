@@ -1,3 +1,4 @@
+from __future__ import division
 import cv2
 import numpy as np
 
@@ -82,11 +83,11 @@ def build_transformation_matrix(
 
 
 def generate_transformations(
-        samples, imsize, allow_rotation, max_offset, min_offset,
-        max_scale, min_scale, max_shear, min_shear,
+        samples, imsize, allow_rotation, rotation_min, rotation_max,
+        max_offset, min_offset, max_scale, min_scale, max_shear, min_shear,
         max_stretch, min_stretch, flip_horizontal, flip_vertical):
     # E [0, 360), uniform
-    radians = np.random.randint(360, size=samples) * (
+    radians = np.random.randint(rotation_min, high=rotation_max, size=samples) * (
         np.pi / 180) if allow_rotation else np.zeros(samples)
 
     # E [min, max], uniform
@@ -126,12 +127,12 @@ def generate_transformations(
     return transformations
 
 
-def apply_transformation_matrix(X, M):
+def apply_transformation_matrix(X, M, border_mode):
     dsize = X.shape[::-1]
-    return cv2.warpAffine(X, M, dsize)
+    return cv2.warpAffine(X, M, dsize, 0, 0, border_mode)
 
 
-def transform_batch(Xb, yb, params, transform_y=False):
+def transform_batch(Xb, yb, params, border_mode, transform_y=False):
     transformations = generate_transformations(
         Xb.shape[0], Xb[0, 0].shape, **params)
     Xbc = np.copy(Xb)
@@ -139,11 +140,11 @@ def transform_batch(Xb, yb, params, transform_y=False):
         ybc = np.copy(yb)
     for i, M in enumerate(transformations):
         if Xbc[i].shape[0] == 1:
-            Xbc[i, 0] = apply_transformation_matrix(Xbc[i, 0], M)
+            Xbc[i, 0] = apply_transformation_matrix(Xbc[i, 0], M, border_mode)
         elif Xbc[i].shape[0] == 3:
-            Xbc[i, 0] = apply_transformation_matrix(Xbc[i, 0], M)
-            Xbc[i, 1] = apply_transformation_matrix(Xbc[i, 1], M)
-            Xbc[i, 2] = apply_transformation_matrix(Xbc[i, 2], M)
+            Xbc[i, 0] = apply_transformation_matrix(Xbc[i, 0], M, border_mode)
+            Xbc[i, 1] = apply_transformation_matrix(Xbc[i, 1], M, border_mode)
+            Xbc[i, 2] = apply_transformation_matrix(Xbc[i, 2], M, border_mode)
         else:
             raise NotImplementedError
         if transform_y:
@@ -162,10 +163,11 @@ def transform_batch(Xb, yb, params, transform_y=False):
         return Xbc, yb
 
 
-def transform(X, y, transform_y=False):
+def transform(X, y, transform_y=False, border_mode=cv2.BORDER_REPLICATE):
     params = {
-        'allow_rotation': False,
-        #'allow_rotation': True,
+        'allow_rotation': True,
+        'rotation_min':-30,
+        'rotation_max':30,
         'min_offset': -0.2,
         'max_offset':  0.2,
         'min_scale': 1,
@@ -176,14 +178,12 @@ def transform(X, y, transform_y=False):
         'max_shear':  0,
         #'min_shear':  -20,
         #'max_shear':   20,
-        'min_stretch': 1,
-        'max_stretch': 1,
+        'min_stretch': 1 / 2,
+        'max_stretch': 2,
         #'min_stretch': 1 / 1.3,
         #'max_stretch':     1.3,
-        'flip_horizontal': 0.5,
-        'flip_vertical': 0.5,
-        #'flip_horizontal': 0.5,
-        #'flip_vertical': 0.5,
+        'flip_horizontal': 0,
+        'flip_vertical': 0,
     }
 
-    return transform_batch(X, y, params, transform_y=transform_y)
+    return transform_batch(X, y, params, border_mode, transform_y=transform_y)

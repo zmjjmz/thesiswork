@@ -137,7 +137,7 @@ def load_dataset(dataset_path, normalize_method='zscore'):
     print("Took %0.2f seconds" % toc)
     return dset
 
-def save_dataset(dataset_path, train, val, test, load_norm_from=None, norms=None):
+def save_dataset(dataset_path, train, val, test, load_norm_from=None, norms=None, grey=False):
     if exists(dataset_path):
         print("Overwriting %s y/n" % dataset_path)
         confirm = raw_input().rstrip()
@@ -148,7 +148,7 @@ def save_dataset(dataset_path, train, val, test, load_norm_from=None, norms=None
     # assume train[0] is the dataset
     # figure out normalization constants
     if (load_norm_from is None) and (norms is None):
-        mean, std = get_img_norm_consts(train[0])
+        mean, std = get_img_norm_consts(train[0], grey=grey)
     elif norms is not None:
         mean, std = norms
     elif load_norm_from is not None:
@@ -157,7 +157,7 @@ def save_dataset(dataset_path, train, val, test, load_norm_from=None, norms=None
                 mean, std = pickle.load(f)
         except IOError:
             print("Couldn't find mean and std in %s" % load_norm_from)
-            mean, std = get_img_norm_consts(train[0])
+            mean, std = get_img_norm_consts(train[0], grey=grey)
 
     tic = time.time()
     dset = {}
