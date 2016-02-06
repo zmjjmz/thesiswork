@@ -212,6 +212,7 @@ def train_epoch(iteration_funcs, dataset, batch_size, batch_loader):
     grad_means = []
     grad_nzs = []
     # train
+    tic_train = time.time()
     during_train_losses = []
     for batch_ind in range(nbatch_train):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
@@ -224,6 +225,8 @@ def train_epoch(iteration_funcs, dataset, batch_size, batch_loader):
         grad_means.append([np.mean(np.abs(grad)) for grad in bloss_grads])
         grad_nzs.append([np.count_nonzero(grad) for grad in bloss_grads])
 
+    toc_train = time.time() - tic_train
+    print("Training took %0.2f seconds" % toc_train)
     avg_grad_mags = np.average(np.array(grad_mags), axis=0)
     avg_grad_means = np.average(np.array(grad_means), axis=0)
     print("Gradient names:\t%s" % iteration_funcs['gradnames'])
@@ -234,6 +237,7 @@ def train_epoch(iteration_funcs, dataset, batch_size, batch_loader):
     train_reg_losses = []
     train_accs = []
 
+    tic_eval_train = time.time()
     # get error on training set
     for batch_ind in range(nbatch_train):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
@@ -241,6 +245,8 @@ def train_epoch(iteration_funcs, dataset, batch_size, batch_loader):
         train_reg_losses.append(batch_train_loss_reg)
         train_losses.append(batch_train_loss)
         train_accs.append(batch_train_acc)
+    toc_eval_train = time.time() - tic_eval_train
+    print("Evaluating on training set took %0.2f seconds" % toc_eval_train)
 
     avg_train_loss = np.mean(train_losses)
     avg_train_reg_loss = np.mean(train_reg_losses)
@@ -251,6 +257,8 @@ def train_epoch(iteration_funcs, dataset, batch_size, batch_loader):
     valid_reg_losses = []
     valid_accs = []
 
+    tic_eval_valid = time.time()
+
     # get error on validation set
     for batch_ind in range(nbatch_valid):
         batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
@@ -258,6 +266,9 @@ def train_epoch(iteration_funcs, dataset, batch_size, batch_loader):
         valid_reg_losses.append(batch_valid_loss_reg)
         valid_losses.append(batch_valid_loss)
         valid_accs.append(batch_valid_acc)
+
+    toc_eval_valid = time.time() - tic_eval_valid
+    print("Evaluating on validation set took %0.2f seconds" % toc_eval_valid)
 
     avg_valid_loss = np.mean(valid_losses)
     avg_valid_reg_loss = np.mean(valid_reg_losses)
