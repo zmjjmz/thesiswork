@@ -205,7 +205,31 @@ def check_for_dupes(idmap):
                 if is_equal(patchset1, patchset2):
                     print("%s has a duplicate image in %s's imageset" % (q_indv, d_indv))
 
-def train_epoch(iteration_funcs, dataset, batch_size, batch_loader):
+def print_gradinfo(gradnames, gradinfo):
+    square_size = int(np.sqrt(len(gradnames)) + 0.5)
+    nrows = square_size
+    if square_size**2 < len(gradnames):
+        nrows += 1
+    rows = []
+    ind = 0
+    ts = 8
+    ntab = 2
+    for _ in range(nrows):
+        this_slice = slice(ind, ind + square_size)
+        name_row = 'name\t' + ('\t'*ntab).join(map(lambda x: x + ' '*(ts*ntab - len(x)), gradnames[this_slice]))
+        row = [name_row]
+        # gradinfo should be structured as a dict of info names to the list (parallel to gradnames) of the corresponding info
+        for k in sorted(gradinfo.keys()):
+            k_row = ('%s\t' % k) + ('\t'*ntab).join(map(lambda x: str(x) + ' '*(ts*ntab - len(str(x))), gradinfo[k][this_slice]))
+            row.append(k_row)
+        row.append('-'*len(row[-1]))
+        row_str = '\n'.join(row)
+        rows.append(row_str)
+        ind += square_size
+    final = '\n'.join(rows)
+    print(final)
+
+def train_epoch(iteration_funcs, dataset, batch_size, batch_loader, layer_names=None):
     nbatch_train = (dataset['train']['y'].shape[0] // batch_size)
     nbatch_valid = (dataset['valid']['y'].shape[0] // batch_size)
     grad_mags = []
@@ -229,10 +253,16 @@ def train_epoch(iteration_funcs, dataset, batch_size, batch_loader):
     print("Training took %0.2f seconds" % toc_train)
     avg_grad_mags = np.average(np.array(grad_mags), axis=0)
     avg_grad_means = np.average(np.array(grad_means), axis=0)
-    print("Gradient names:\t%s" % iteration_funcs['gradnames'])
-    print("Gradient magnitudes:\t%s" % avg_grad_mags)
-    print("Gradient means:\t%s" % avg_grad_means)
-    print("Gadient nonzeros:\t%s" % grad_nzs[0]) # this shouldn't change
+    avg_grad_nnzs = np.average(np.array(grad_nzs), axis=0)
+    if layer_names is None:
+        layer_names = range(avg_grad_mags.shape[0])
+    print_gradinfo(iteration_funcs['gradnames'], {'l2_norm':avg_grad_mags,
+                                                  'mean':avg_grad_means,
+                                                  'nnzs':avg_grad_nnzs})
+    #print("Gradient names:\t%s" % iteration_funcs['gradnames'])
+    #print("Gradient magnitudes:\t%s" % avg_grad_mags)
+    #print("Gradient means:\t%s" % avg_grad_means)
+    #print("Gadient nonzeros:\t%s" % grad_nzs[0]) # this shouldn't change
     train_losses = []
     train_reg_losses = []
     train_accs = []
@@ -291,13 +321,19 @@ def load_whole_image(imgs_dir, img, img_shape=None):
         return cv2.imread(join(imgs_dir, img))
 
 def parameter_analysis(layer):
-    all_params = ll.get_all_param_values(layer, regularizable=True)
+    all_params = ll.get_all_param_values(layer, trainable=True)
+    param_names = [p.name for p in ll.get_all_params(layer, trainable=True)]
+    print_gradinfo(param_names, {'nneg':[np.count_nonzero(p < 0) / np.product(p.shape) for p in all_params],
+                                 'norm':[np.linalg.norm(p) for p in all_params],
+                                 'shape':[p.shape for p in all_params]})
+    """
     for param in all_params:
         print(param.shape)
         nneg_w = np.count_nonzero(param < 0) / np.product(param.shape)
         normed_norm = np.linalg.norm(param)# / np.product(param.shape)
         print("Number of negative weights: %0.2f" % nneg_w)
         print("Weight norm: %0.5f" % normed_norm)
+    """
 
 def build_vgg16_seg():
     net = {}
