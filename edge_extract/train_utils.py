@@ -16,6 +16,7 @@ import numpy as np
 import time
 from sklearn.utils import shuffle
 import scipy.sparse as ss
+import utool as ut
 
 with open('../dataset_loc','r') as f:
     dataset_loc = f.read().rstrip()
@@ -117,22 +118,19 @@ def load_dataset(dataset_path, normalize_method='zscore'):
     print("Loading %s" % dataset_path)
     tic = time.time()
     dset = {}
-    with open(join(dataset_path, 'meanstd.pkl'), 'r') as f:
-        mean, std = pickle.load(f)
-        dset['mean'] = mean
-        dset['std'] = std
+    mean, std = ut.load_cPkl(join(dataset_path, 'meanstd.pkl'))
+    dset['mean'] = mean
+    dset['std'] = std
     if normalize_method == 'zscore':
         normalize = lambda x: (normalize_patch(x[0], mean=dset['mean'], std=dset['std']),) + (x[1:])
     elif normalize_method == 'meansub':
         normalize = lambda x: (x[0].astype(np.float32) - dset['mean'],) + (x[1:])
     elif normalize_method is None:
         normalize = lambda x: x
-    with open(join(dataset_path, 'train.pkl'),'r') as f:
-        dset['train'] = normalize(pickle.load(f))
-    with open(join(dataset_path, 'val.pkl'),'r') as f:
-        dset['valid'] = normalize(pickle.load(f))
-    with open(join(dataset_path, 'test.pkl'),'r') as f:
-        dset['test'] = normalize(pickle.load(f))
+
+    dset['train'] = normalize(ut.load_cPkl(join(dataset_path, 'train.pkl')))
+    dset['valid'] = normalize(ut.load_cPkl(join(dataset_path, 'val.pkl')))
+    dset['test'] = normalize(ut.load_cPkl(join(dataset_path, 'test.pkl')))
     toc = time.time() - tic
     print("Took %0.2f seconds" % toc)
     return dset
@@ -153,22 +151,18 @@ def save_dataset(dataset_path, train, val, test, load_norm_from=None, norms=None
         mean, std = norms
     elif load_norm_from is not None:
         try:
-            with open(join(load_norm_from, 'meanstd.pkl'), 'r') as f:
-                mean, std = pickle.load(f)
+            mean, std = ut.load_cPkl(join(load_norm_from, 'meanstd.pkl'))
         except IOError:
             print("Couldn't find mean and std in %s" % load_norm_from)
             mean, std = get_img_norm_consts(train[0], grey=grey)
 
     tic = time.time()
-    dset = {}
-    with open(join(dataset_path, 'train.pkl'),'w') as f:
-        pickle.dump(train,f)
-    with open(join(dataset_path, 'val.pkl'),'w') as f:
-        pickle.dump(val,f)
-    with open(join(dataset_path, 'test.pkl'),'w') as f:
-        pickle.dump(test,f)
-    with open(join(dataset_path, 'meanstd.pkl'),'w') as f:
-        pickle.dump((mean, std),f)
+
+    ut.save_cPkl(join(dataset_path, 'train.pkl'), train)
+    ut.save_cPkl(join(dataset_path, 'val.pkl'), val)
+    ut.save_cPkl(join(dataset_path, 'test.pkl'), test)
+    ut.save_cPkl(join(dataset_path, 'meanstd.pkl'), (mean, std))
+
     toc = time.time() - tic
     print("Took %0.2f seconds" % toc)
 
@@ -247,7 +241,7 @@ def train_epoch(iteration_funcs, dataset, batch_size, batch_loader, layer_names=
         during_train_losses.append(batch_train_loss_reg)
         grad_mags.append([np.linalg.norm(grad) for grad in bloss_grads])
         grad_means.append([np.mean(np.abs(grad)) for grad in bloss_grads])
-        grad_nzs.append([np.count_nonzero(grad) for grad in bloss_grads])
+        grad_nzs.append([np.count_nonzero(grad) / np.product(grad.shape)  for grad in bloss_grads])
 
     toc_train = time.time() - tic_train
     print("Training took %0.2f seconds" % toc_train)
@@ -368,8 +362,7 @@ def build_vgg16_seg():
 
     # load parameters
     param_file = join(dataset_loc, "vgg16.pkl")
-    with open(param_file, 'r') as f:
-        params = pickle.load(f)
+    params = ut.load_cPkl(param_file)
 
     ll.set_all_param_values(net['conv5_3'], params['param values'][:26])
     return net
@@ -407,8 +400,7 @@ def build_vgg16_class():
 
     # load parameters
     param_file = join(dataset_loc, "vgg16.pkl")
-    with open(param_file, 'r') as f:
-        params = pickle.load(f)
+    params = ut.load_cPkl(param_file)
 
     ll.set_all_param_values(net['fc8'], params['param values'])
     return net
