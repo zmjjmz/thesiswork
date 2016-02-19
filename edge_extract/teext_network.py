@@ -271,24 +271,32 @@ if __name__ == "__main__":
     best_params = ll.get_all_param_values(kp_extractor)
     best_val_loss = np.inf
     layer_names = [p.name for p in ll.get_all_params(kp_extractor, trainable=True)]
-    for epoch in range(n_epochs):
-        tic = time.time()
-        print("Epoch %d" % (epoch))
-        loss = train_epoch(iter_funcs, dset, batch_size, nonaugmenting_batch_loader, layer_names=layer_names)
-        epoch_losses.append(loss['train_loss'])
-        batch_losses.append(loss['all_train_loss'])
-        # shuffle training set
-        dset['train'] = shuffle_dataset(dset['train'])
-        toc = time.time() - tic
-        print("Learning rate: %0.5f" % momentum_params['l_r'].get_value())
-        print("Train loss (reg): %0.3f\nTrain loss: %0.3f\nValid loss: %0.3f" %
-                (loss['train_reg_loss'],loss['train_loss'],loss['valid_loss']))
-        print("Train Pixel Precision @0.5: %s\nValid Pixel Precision @0.5: %s" % (loss['train_acc'], loss['valid_acc']))
-        if loss['valid_loss'] < best_val_loss:
-            best_params = ll.get_all_param_values(kp_extractor)
-            best_val_loss = loss['valid_loss']
-            print("New best validation loss!")
-        print("Took %0.2f seconds" % toc)
+    save_model = True
+    try:
+        for epoch in range(n_epochs):
+            tic = time.time()
+            print("Epoch %d" % (epoch))
+            loss = train_epoch(iter_funcs, dset, batch_size, nonaugmenting_batch_loader, layer_names=layer_names)
+            epoch_losses.append(loss['train_loss'])
+            batch_losses.append(loss['all_train_loss'])
+            # shuffle training set
+            dset['train'] = shuffle_dataset(dset['train'])
+            toc = time.time() - tic
+            print("Learning rate: %0.5f" % momentum_params['l_r'].get_value())
+            print("Train loss (reg): %0.3f\nTrain loss: %0.3f\nValid loss: %0.3f" %
+                    (loss['train_reg_loss'],loss['train_loss'],loss['valid_loss']))
+            print("Train Pixel Precision @0.5: %s\nValid Pixel Precision @0.5: %s" % (loss['train_acc'], loss['valid_acc']))
+            if loss['valid_loss'] < best_val_loss:
+                best_params = ll.get_all_param_values(kp_extractor)
+                best_val_loss = loss['valid_loss']
+                print("New best validation loss!")
+            print("Took %0.2f seconds" % toc)
+    except KeyboardInterrupt:
+        print("Training interrupted, save model? y/n")
+        confirm = raw_input().rstrip()
+        if confirm != 'n':
+            save_model = False
+
     batch_losses = list(chain(*batch_losses))
     losses = {}
     losses['batch'] = batch_losses
@@ -297,4 +305,5 @@ if __name__ == "__main__":
     display_losses(losses, n_epochs, batch_size, dset['train']['X'].shape[0])
 
     # TODO: move to train_utils and add way to load up previous model
-    ut.save_cPkl(join(dataset_loc, "Flukes/patches/%s/model.pkl" % dset_name), best_params)
+    if save_model:
+        ut.save_cPkl(join(dataset_loc, "Flukes/patches/%s/model.pkl" % dset_name), best_params)
