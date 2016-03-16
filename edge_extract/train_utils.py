@@ -17,6 +17,7 @@ import time
 from sklearn.utils import shuffle
 import scipy.sparse as ss
 import utool as ut
+from math import ceil
 
 with open('../dataset_loc','r') as f:
     dataset_loc = f.read().rstrip()
@@ -447,5 +448,24 @@ def display_losses(losses, n_epochs, batch_size, train_size, fn='losses.png'):
     ax.scatter([i*batches_per_epoch for i in range(n_epochs)], losses['epoch'], color='r', s=10.)
     plt.savefig(fn)
 
+
+def batch_compute(lis, network_fn, batch_size):
+    # just batches computation
+    # assume lis is a np array w/batch axis as first axis
+    nbatches = int(ceil(lis.shape[0] / batch_size))
+    to_stack = []
+    for batch_ind in range(nbatches):
+        batch_slice = slice(batch_ind*batch_size, (batch_ind + 1)*batch_size)
+        processed = network_fn(lis[batch_slice])
+        to_stack.append(processed)
+
+    try:
+        stacked = np.concatenate(to_stack,axis=0)
+    except ValueError:
+        print(to_stack[0])
+        print([i.shape for i in to_stack])
+        raise
+
+    return stacked
 
 

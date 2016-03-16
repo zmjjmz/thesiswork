@@ -23,6 +23,7 @@ import theano.tensor as T
 import theano
 from theano.compile.nanguardmode import NanGuardMode
 from da import transform
+import utool as ut
 
 from train_utils import (
         ResponseNormalizationLayer,
@@ -115,6 +116,52 @@ def build_kpextractor128():
 
     return out_rs
 
+def build_kpextractor64_decoupled():
+    inp = ll.InputLayer(shape=(None, 1, 64, 64), name='input')
+    # alternate pooling and conv layers to minimize parameters
+    filter_pad = lambda x, y: (x//2, y//2)
+    filter3 = (3, 3)
+    same_pad3 = filter_pad(*filter3)
+    conv1 = ll.Conv2DLayer(inp, num_filters=16, filter_size=filter3, pad=same_pad3, W=Orthogonal(), nonlinearity=rectify, name='conv1')
+    mp1 = ll.MaxPool2DLayer(conv1, 2, stride=2) # now down to 32 x 32
+    bn1 = ll.BatchNormLayer(mp1)
+    conv2 = ll.Conv2DLayer(bn1, num_filters=32, filter_size=filter3, pad=same_pad3, W=Orthogonal(), nonlinearity=rectify, name='conv2')
+    mp2 = ll.MaxPool2DLayer(conv2, 2, stride=2) # now down to 16 x 16
+    bn2 = ll.BatchNormLayer(mp2)
+    conv3 = ll.Conv2DLayer(bn2, num_filters=64, filter_size=filter3, pad=same_pad3, W=Orthogonal(), nonlinearity=rectify, name='conv3')
+    mp3 = ll.MaxPool2DLayer(conv3, 2, stride=2) # now down to 8 x 8
+    bn3 = ll.BatchNormLayer(mp3)
+    conv4 = ll.Conv2DLayer(bn3, num_filters=128, filter_size=filter3, pad=same_pad3, W=Orthogonal(), nonlinearity=rectify, name='conv4')
+    mp4 = ll.MaxPool2DLayer(conv4, 2, stride=2) # now down to 4 x 4
+    bn4 = ll.BatchNormLayer(mp4)
+    conv5 = ll.Conv2DLayer(bn4, num_filters=256, filter_size=filter3, pad=same_pad3, W=Orthogonal(), nonlinearity=rectify, name='conv5')
+    mp5 = ll.MaxPool2DLayer(conv5, 2, stride=2) # down to 2 x 2
+    bn5 = ll.BatchNormLayer(mp5)
+
+    dp0 = ll.DropoutLayer(bn5, p=0.5)
+
+    # now let's bring it down to a FC layer that takes in the 2x2x64 mp4 output
+    fc1 = ll.DenseLayer(dp0, num_units=256, nonlinearity=rectify)
+    bn1_fc = ll.BatchNormLayer(fc1)
+    dp1 = ll.DropoutLayer(bn1_fc, p=0.5)
+    # so what we're going to do here instead is break this into three separate layers (each 32 units)
+    # then each of these layers goes into a separate out, and out_rs will be a merge and then reshape
+    fc2_left = ll.DenseLayer(dp1, num_units=32, nonlinearity=rectify)
+    fc2_right = ll.DenseLayer(dp1, num_units=32, nonlinearity=rectify)
+    fc2_notch = ll.DenseLayer(dp1, num_units=32, nonlinearity=rectify)
+
+    out_left = ll.DenseLayer(fc2_left, num_units=2, nonlinearity=linear)
+    out_right = ll.DenseLayer(fc2_right, num_units=2, nonlinearity=linear)
+    out_notch = ll.DenseLayer(fc2_notch, num_units=2, nonlinearity=linear)
+
+    out = ll.ConcatLayer([out_left, out_right, out_notch], axis=1)
+    out_rs = ll.ReshapeLayer(out, ([0], 3, 2))
+
+    return out_rs
+
+
+
+
 def build_kpextractor128_decoupled():
     inp = ll.InputLayer(shape=(None, 1, 128, 128), name='input')
     # alternate pooling and conv layers to minimize parameters
@@ -138,9 +185,60 @@ def build_kpextractor128_decoupled():
     bn5 = ll.BatchNormLayer(mp5)
 
     conv6 = ll.Conv2DLayer(bn5, num_filters=512, filter_size=filter3, pad=same_pad3, W=Orthogonal(), nonlinearity=rectify, name='conv6')
-    mp6 = ll.MaxPool2DLayer(conv6, 2, stride=2) # down to 4 x 4
+    mp6 = ll.MaxPool2DLayer(conv6, 2, stride=2) # down to 2 x 2
     bn6 = ll.BatchNormLayer(mp6)
     dp0 = ll.DropoutLayer(bn6, p=0.5)
+
+    # now let's bring it down to a FC layer that takes in the 2x2x512 mp4 output
+    fc1 = ll.DenseLayer(dp0, num_units=256, nonlinearity=rectify)
+    bn1_fc = ll.BatchNormLayer(fc1)
+    dp1 = ll.DropoutLayer(bn1_fc, p=0.5)
+    # so what we're going to do here instead is break this into three separate layers (each 32 units)
+    # then each of these layers goes into a separate out, and out_rs will be a merge and then reshape
+    fc2_left = ll.DenseLayer(dp1, num_units=32, nonlinearity=rectify)
+    fc2_right = ll.DenseLayer(dp1, num_units=32, nonlinearity=rectify)
+    fc2_notch = ll.DenseLayer(dp1, num_units=32, nonlinearity=rectify)
+
+    out_left = ll.DenseLayer(fc2_left, num_units=2, nonlinearity=linear)
+    out_right = ll.DenseLayer(fc2_right, num_units=2, nonlinearity=linear)
+    out_notch = ll.DenseLayer(fc2_notch, num_units=2, nonlinearity=linear)
+
+    out = ll.ConcatLayer([out_left, out_right, out_notch], axis=1)
+    out_rs = ll.ReshapeLayer(out, ([0], 3, 2))
+
+    return out_rs
+
+
+def build_kpextractor256_decoupled():
+    inp = ll.InputLayer(shape=(None, 1, 256, 256), name='input')
+    # alternate pooling and conv layers to minimize parameters
+    filter_pad = lambda x, y: (x//2, y//2)
+    filter3 = (3, 3)
+    same_pad3 = filter_pad(*filter3)
+    conv1 = ll.Conv2DLayer(inp, num_filters=8, filter_size=filter3, pad=same_pad3, W=Orthogonal(), nonlinearity=rectify, name='conv1')
+    mp1 = ll.MaxPool2DLayer(conv1, 2, stride=2) # now down to 128 x 128
+    bn1 = ll.BatchNormLayer(mp1)
+    conv2 = ll.Conv2DLayer(bn1, num_filters=16, filter_size=filter3, pad=same_pad3, W=Orthogonal(), nonlinearity=rectify, name='conv2')
+    mp2 = ll.MaxPool2DLayer(conv2, 2, stride=2) # now down to 128 x 128
+    bn2 = ll.BatchNormLayer(mp2)
+
+    conv3 = ll.Conv2DLayer(bn2, num_filters=32, filter_size=filter3, pad=same_pad3, W=Orthogonal(), nonlinearity=rectify, name='conv3')
+    mp3 = ll.MaxPool2DLayer(conv3, 2, stride=2) # now down to 32 x 32
+    bn3 = ll.BatchNormLayer(mp3)
+    conv4 = ll.Conv2DLayer(bn3, num_filters=64, filter_size=filter3, pad=same_pad3, W=Orthogonal(), nonlinearity=rectify, name='conv4')
+    mp4 = ll.MaxPool2DLayer(conv4, 2, stride=2) # now down to 16 x 16
+    bn4 = ll.BatchNormLayer(mp4)
+    conv5 = ll.Conv2DLayer(bn4, num_filters=128, filter_size=filter3, pad=same_pad3, W=Orthogonal(), nonlinearity=rectify, name='conv5')
+    mp5 = ll.MaxPool2DLayer(conv5, 2, stride=2) # now down to 8 x 8
+    bn5 = ll.BatchNormLayer(mp5)
+    conv6 = ll.Conv2DLayer(bn5, num_filters=256, filter_size=filter3, pad=same_pad3, W=Orthogonal(), nonlinearity=rectify, name='conv6')
+    mp6 = ll.MaxPool2DLayer(conv6, 2, stride=2) # down to 4 x 4
+    bn6 = ll.BatchNormLayer(mp6)
+
+    conv7 = ll.Conv2DLayer(bn6, num_filters=512, filter_size=filter3, pad=same_pad3, W=Orthogonal(), nonlinearity=rectify, name='conv7')
+    mp7 = ll.MaxPool2DLayer(conv7, 2, stride=2) # down to 4 x 4
+    bn7 = ll.BatchNormLayer(mp7)
+    dp0 = ll.DropoutLayer(bn7, p=0.5)
 
     # now let's bring it down to a FC layer that takes in the 2x2x64 mp4 output
     fc1 = ll.DenseLayer(dp0, num_units=256, nonlinearity=rectify)
@@ -160,6 +258,7 @@ def build_kpextractor128_decoupled():
     out_rs = ll.ReshapeLayer(out, ([0], 3, 2))
 
     return out_rs
+
 
 def build_kpextractor128_decoupled_stn():
     inp = ll.InputLayer(shape=(None, 1, 128, 128), name='input')
@@ -279,7 +378,7 @@ def loss_iter(kpextractor, update_params={}):
     # and the avg std of the true points over the batch
     std_diff = lambda pred: T.sqrt(T.mean((T.std(pred,axis=0) - T.std(y,axis=0))**2))
     losses = lambda pred: T.mean(scaled_cost(pred, 0.002))
-    decay = 1e-5
+    decay = 1e-4
     reg = regularize_network_params(kpextractor, l2) * decay
 
     #predT_p = theano.printing.Print()(T.mean(predicted_points_train,axis=0))
@@ -290,9 +389,9 @@ def loss_iter(kpextractor, update_params={}):
     #all_params = filter(lambda x: not(x.name.startswith('loc')), all_params)
     grads = T.grad(loss_train, all_params, add_names=True)
 
-    updates = nesterov_momentum(grads, all_params, update_params['l_r'], momentum=update_params['momentum'])
-    #updates[update_params['l_r']] = update_params['l_r'] * 0.999
-    #updates = adam(grads, all_params)
+    #updates = nesterov_momentum(grads, all_params, update_params['l_r'], momentum=update_params['momentum'])
+    #updates[update_params['l_r']] = update_params['l_r'] * 0.9999
+    updates = adam(grads, all_params)
 
     # calculate and report average pixel distance in the real image
     #sizey, sizex = all_layers[0].shape[2:]
@@ -364,7 +463,7 @@ if __name__ == "__main__":
     toc = time.time() - tic
     epoch_losses = []
     batch_losses = []
-    kp_extractor = build_kpextractor128_decoupled_stn()
+    kp_extractor = build_kpextractor128_decoupled()
     model_path = join(dataset_loc, "Flukes/kpts/%s/model.pkl" % dset_name)
     if options.resume and exists(model_path):
         with open(model_path, 'r') as f:
@@ -377,31 +476,40 @@ if __name__ == "__main__":
     best_params = ll.get_all_param_values(kp_extractor)
     best_val_loss = np.inf
     layer_names = [p.name for p in ll.get_all_params(kp_extractor, trainable=True)]
-    for epoch in range(n_epochs):
-        tic = time.time()
-        print("Epoch %d" % (epoch))
-        loss = train_epoch(iter_funcs, dset, batch_size, nonaugmenting_batch_loader, layer_names=layer_names)
-        epoch_losses.append(loss['train_loss'])
-        batch_losses.append(loss['all_train_loss'])
-        # shuffle training set
-        dset['train'] = shuffle_dataset(dset['train'])
-        toc = time.time() - tic
-        print("Learning rate: %0.5f" % momentum_params['l_r'].get_value())
-        print("Train loss (reg): %0.3f\nTrain loss: %0.3f\nValid loss: %0.3f" %
-                (loss['train_reg_loss'],loss['train_loss'],loss['valid_loss']))
-        print("Train Pixel Dist: %s\nValid Pixel Dist: %s" % (loss['train_acc'], loss['valid_acc']))
-        if loss['valid_loss'] < best_val_loss:
-            best_params = ll.get_all_param_values(kp_extractor)
-            best_val_loss = loss['valid_loss']
-            print("New best validation loss!")
-        print("Took %0.2f seconds" % toc)
+    save_model = True
+    try:
+        for epoch in range(n_epochs):
+            tic = time.time()
+            print("Epoch %d" % (epoch))
+            loss = train_epoch(iter_funcs, dset, batch_size, nonaugmenting_batch_loader, layer_names=layer_names)
+            epoch_losses.append(loss['train_loss'])
+            batch_losses.append(loss['all_train_loss'])
+            # shuffle training set
+            dset['train'] = shuffle_dataset(dset['train'])
+            toc = time.time() - tic
+            print("Learning rate: %0.5f" % momentum_params['l_r'].get_value())
+            print("Train loss (reg): %0.3f\nTrain loss: %0.3f\nValid loss: %0.3f" %
+                    (loss['train_reg_loss'],loss['train_loss'],loss['valid_loss']))
+            print("Train Pixel Dist: %s\nValid Pixel Dist: %s" % (loss['train_acc'], loss['valid_acc']))
+            if loss['valid_loss'] < best_val_loss:
+                best_params = ll.get_all_param_values(kp_extractor)
+                best_val_loss = loss['valid_loss']
+                print("New best validation loss!")
+            print("Took %0.2f seconds" % toc)
+    except KeyboardInterrupt:
+        print("Training interrupted, save model? y/n")
+        confirm = raw_input().rstrip()
+        if confirm == 'n':
+            print("Not saving model")
+            save_model = False
+
+
     batch_losses = list(chain(*batch_losses))
     losses = {}
     losses['batch'] = batch_losses
     losses['epoch'] = epoch_losses
     parameter_analysis(kp_extractor)
-    display_losses(losses, n_epochs, batch_size, dset['train']['X'].shape[0])
 
-    # TODO: move to train_utils and add way to load up previous model
-    with open(join(dataset_loc, "Flukes/kpts/%s/model.pkl" % dset_name), 'w') as f:
-        pickle.dump(best_params, f)
+    if save_model:
+        ut.save_cPkl(model_path, best_params)
+        display_losses(losses, n_epochs, batch_size, dset['train']['X'].shape[0])

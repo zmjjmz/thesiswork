@@ -76,25 +76,73 @@ def build_segmenter_simple():
 
     return [softmax]
 
+def build_segmenter_simple_absurd():
+    inp = ll.InputLayer(shape=(None, 1, None, None), name='input')
+    n_layers = 64 # should get a 128 x 128 receptive field
+    layers = [inp]
+    for i in range(n_layers):
+        layers.append(ll.Conv2DLayer(layers[-1], num_filters=8, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv%d' % (i+1)))
+        layers.append(ll.BatchNormLayer(layers[-1], name='bn%i' % (i+1)))
+
+    # our output layer is also convolutional, remember that our Y is going to be the same exact size as the
+    conv_final = ll.Conv2DLayer(layers[-1], num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), name='conv_final', nonlinearity=linear)
+    # we need to reshape it to be a (batch*n*m x 3), i.e. unroll s.t. the feature dimension is preserved
+    softmax = Softmax4D(conv_final, name='4dsoftmax')
+
+    return [softmax]
+
+def build_segmenter_simple_absurd_res():
+    sys.setrecursionlimit(1500)
+    inp = ll.InputLayer(shape=(None, 1, None, None), name='input')
+    n_layers = 64 # should get a 128 x 128 receptive field
+    layers = [inp]
+    for i in range(n_layers):
+        # every 2 layers, add a skip connection
+        layers.append(ll.Conv2DLayer(layers[-1], num_filters=8, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=linear, name='conv%d' % (i+1)))
+        layers.append(ll.BatchNormLayer(layers[-1], name='bn%i' % (i+1)))
+        if (i % 2 == 0) and (i != 0):
+            layers.append(ll.ElemwiseSumLayer([layers[-1], # prev layer
+                                              layers[-6],] # 3 actual layers per block, skip the previous block
+                                              ))
+        layers.append(ll.NonlinearityLayer(layers[-1], nonlinearity=rectify))
+
+    # our output layer is also convolutional, remember that our Y is going to be the same exact size as the
+    conv_final = ll.Conv2DLayer(layers[-1], num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), name='conv_final', nonlinearity=linear)
+    # we need to reshape it to be a (batch*n*m x 3), i.e. unroll s.t. the feature dimension is preserved
+    softmax = Softmax4D(conv_final, name='4dsoftmax')
+
+    return [softmax]
+
+
+
+
 def build_segmenter_upsample():
     # downsample down to a small region, then upsample all the way back up
     # Note: w/o any learning on the upsampler, we're limited in how far we can downsample
     # there will always be an error signal unless the loss fn is run on downsampled targets...
     inp = ll.InputLayer(shape=(None, 1, None, None), name='input')
     conv1 = ll.Conv2DLayer(inp, num_filters=32, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv1_1')
-    conv2 = ll.Conv2DLayer(conv1, num_filters=64, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv1_2')
-    mp1 = ll.MaxPool2DLayer(conv2, 2, stride=2, name='mp1') # 2x downsample
+    bn1 = ll.BatchNormLayer(conv1, name='bn1')
+    conv2 = ll.Conv2DLayer(bn1, num_filters=64, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv1_2')
+    bn2 = ll.BatchNormLayer(conv2, name='bn2')
+    mp1 = ll.MaxPool2DLayer(bn2, 2, stride=2, name='mp1') # 2x downsample
     conv3 = ll.Conv2DLayer(mp1, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv2_1')
-    conv4 = ll.Conv2DLayer(conv3, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv2_2')
-    mp2 = ll.MaxPool2DLayer(conv4, 2, stride=2, name='mp2') # 4x downsample
+    bn3 = ll.BatchNormLayer(conv3, name='bn3')
+    conv4 = ll.Conv2DLayer(bn3, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv2_2')
+    bn4 = ll.BatchNormLayer(conv4, name='bn4')
+    mp2 = ll.MaxPool2DLayer(bn4, 2, stride=2, name='mp2') # 4x downsample
     conv5 = ll.Conv2DLayer(mp2, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv3_1')
-    conv6 = ll.Conv2DLayer(conv5, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv3_2')
-    mp3 = ll.MaxPool2DLayer(conv6, 2, stride=2, name='mp3') # 8x downsample
+    bn5 = ll.BatchNormLayer(conv5, name='bn5')
+    conv6 = ll.Conv2DLayer(bn5, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv3_2')
+    bn6 = ll.BatchNormLayer(conv6, name='bn6')
+    mp3 = ll.MaxPool2DLayer(bn6, 2, stride=2, name='mp3') # 8x downsample
     conv7 = ll.Conv2DLayer(mp3, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv4_1')
-    conv8 = ll.Conv2DLayer(conv7, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv4_2')
+    bn7 = ll.BatchNormLayer(conv7, name='bn7')
+    conv8 = ll.Conv2DLayer(bn7, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv4_2')
+    bn8 = ll.BatchNormLayer(conv8, name='bn8')
     # f 68 s 8
     # now start the upsample
-    up = ll.Upscale2DLayer(conv8, 8, name='upsample_8x')
+    up = ll.Upscale2DLayer(bn8, 8, name='upsample_8x')
     conv_f = ll.Conv2DLayer(up, num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=linear, name='conv_final')
     softmax = Softmax4D(conv_f, name='4dsoftmax')
     return [softmax]
@@ -105,27 +153,35 @@ def build_segmenter_jet():
     # recreate basic FCN-8s structure (though more aptly 1s here since we upsample back to the original input size)
     inp = ll.InputLayer(shape=(None, 1, None, None), name='input')
     conv1 = ll.Conv2DLayer(inp, num_filters=32, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv1_1')
-    conv2 = ll.Conv2DLayer(conv1, num_filters=64, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv1_2')
-    mp1 = ll.MaxPool2DLayer(conv2, 2, stride=2, name='mp1') # 2x downsample
+    bn1 = ll.BatchNormLayer(conv1, name='bn1')
+    conv2 = ll.Conv2DLayer(bn1, num_filters=64, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv1_2')
+    bn2 = ll.BatchNormLayer(conv2, name='bn2')
+    mp1 = ll.MaxPool2DLayer(bn2, 2, stride=2, name='mp1') # 2x downsample
     conv3 = ll.Conv2DLayer(mp1, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv2_1')
-    conv4 = ll.Conv2DLayer(conv3, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv2_2')
-    mp2 = ll.MaxPool2DLayer(conv4, 2, stride=2, name='mp2') # 4x downsample
+    bn3 = ll.BatchNormLayer(conv3, name='bn3')
+    conv4 = ll.Conv2DLayer(bn3, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv2_2')
+    bn4 = ll.BatchNormLayer(conv4, name='bn4')
+    mp2 = ll.MaxPool2DLayer(bn4, 2, stride=2, name='mp2') # 4x downsample
     conv5 = ll.Conv2DLayer(mp2, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv3_1')
-    conv6 = ll.Conv2DLayer(conv5, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv3_2')
-    mp3 = ll.MaxPool2DLayer(conv6, 2, stride=2, name='mp3') # 8x downsample
+    bn5 = ll.BatchNormLayer(conv5, name='bn5')
+    conv6 = ll.Conv2DLayer(bn5, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv3_2')
+    bn6 = ll.BatchNormLayer(conv6, name='bn6')
+    mp3 = ll.MaxPool2DLayer(bn6, 2, stride=2, name='mp3') # 8x downsample
     conv7 = ll.Conv2DLayer(mp3, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv4_1')
-    conv8 = ll.Conv2DLayer(conv7, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv4_2')
+    bn7 = ll.BatchNormLayer(conv7, name='bn7')
+    conv8 = ll.Conv2DLayer(bn7, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv4_2')
+    bn8 = ll.BatchNormLayer(conv8, name='bn8')
     # f 68 s 8
     # now start the upsample
     ## FIRST UPSAMPLE PREDICTION (akin to FCN-32s)
-    conv_f8 = ll.Conv2DLayer(conv8, num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=linear,
+    conv_f8 = ll.Conv2DLayer(bn8, num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=linear,
                              name='conv_8xpred')
     softmax_8 = Softmax4D(conv_f8, name='4dsoftmax_8x')
     up8 = ll.Upscale2DLayer(softmax_8, 8, name='upsample_8x') # take loss here, 8x upsample from 8x downsample
 
     ## COMBINE BY UPSAMPLING SOFTMAX 8 AND PRED ON CONV 6
     softmax_4up = ll.Upscale2DLayer(softmax_8, 2, name='upsample_4x_pre') # 4x downsample
-    conv_f6 = ll.Conv2DLayer(conv6, num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=linear,
+    conv_f6 = ll.Conv2DLayer(bn6, num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=linear,
                              name='conv_4xpred')
     softmax_4 = Softmax4D(conv_f6, name='4dsoftmax_4x') # 4x downsample
     softmax_4_merge = ll.ElemwiseSumLayer([softmax_4, softmax_4up], coeffs=0.5, name='softmax_4_merge')
@@ -134,7 +190,7 @@ def build_segmenter_jet():
 
     ## COMBINE BY UPSAMPLING SOFTMAX_4_MERGE AND CONV 4
     softmax_2up = ll.Upscale2DLayer(softmax_4_merge, 2, name='upsample_2x_pre') # 2x downsample
-    conv_f4 = ll.Conv2DLayer(conv4, num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=linear,
+    conv_f4 = ll.Conv2DLayer(bn4, num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=linear,
                              name='conv_2xpred')
 
     softmax_2 = Softmax4D(conv_f4, name='4dsoftmax_2x')
@@ -150,27 +206,35 @@ def build_segmenter_jet_2():
     # this jet will have another conv layer in the final upsample
     inp = ll.InputLayer(shape=(None, 1, None, None), name='input')
     conv1 = ll.Conv2DLayer(inp, num_filters=32, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv1_1')
-    conv2 = ll.Conv2DLayer(conv1, num_filters=64, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv1_2')
-    mp1 = ll.MaxPool2DLayer(conv2, 2, stride=2, name='mp1') # 2x downsample
+    bn1 = ll.BatchNormLayer(conv1, name='bn1')
+    conv2 = ll.Conv2DLayer(bn1, num_filters=64, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv1_2')
+    bn2 = ll.BatchNormLayer(conv2, name='bn2')
+    mp1 = ll.MaxPool2DLayer(bn2, 2, stride=2, name='mp1') # 2x downsample
     conv3 = ll.Conv2DLayer(mp1, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv2_1')
-    conv4 = ll.Conv2DLayer(conv3, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv2_2')
-    mp2 = ll.MaxPool2DLayer(conv4, 2, stride=2, name='mp2') # 4x downsample
+    bn3 = ll.BatchNormLayer(conv3, name='bn3')
+    conv4 = ll.Conv2DLayer(bn3, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv2_2')
+    bn4 = ll.BatchNormLayer(conv4, name='bn4')
+    mp2 = ll.MaxPool2DLayer(bn4, 2, stride=2, name='mp2') # 4x downsample
     conv5 = ll.Conv2DLayer(mp2, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv3_1')
-    conv6 = ll.Conv2DLayer(conv5, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv3_2')
-    mp3 = ll.MaxPool2DLayer(conv6, 2, stride=2, name='mp3') # 8x downsample
+    bn5 = ll.BatchNormLayer(conv5, name='bn5')
+    conv6 = ll.Conv2DLayer(bn5, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv3_2')
+    bn6 = ll.BatchNormLayer(conv6, name='bn6')
+    mp3 = ll.MaxPool2DLayer(bn6, 2, stride=2, name='mp3') # 8x downsample
     conv7 = ll.Conv2DLayer(mp3, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv4_1')
-    conv8 = ll.Conv2DLayer(conv7, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv4_2')
+    bn7 = ll.BatchNormLayer(conv7, name='bn7')
+    conv8 = ll.Conv2DLayer(bn7, num_filters=128, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=rectify, name='conv4_2')
+    bn8 = ll.BatchNormLayer(conv8, name='bn8')
     # f 68 s 8
     # now start the upsample
     ## FIRST UPSAMPLE PREDICTION (akin to FCN-32s)
-    conv_f8 = ll.Conv2DLayer(conv8, num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=linear,
+    conv_f8 = ll.Conv2DLayer(bn8, num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=linear,
                              name='conv_8xpred')
     softmax_8 = Softmax4D(conv_f8, name='4dsoftmax_8x')
     up8 = ll.Upscale2DLayer(softmax_8, 8, name='upsample_8x') # take loss here, 8x upsample from 8x downsample
 
     ## COMBINE BY UPSAMPLING SOFTMAX 8 AND PRED ON CONV 6
     softmax_4up = ll.Upscale2DLayer(softmax_8, 2, name='upsample_4x_pre') # 4x downsample
-    conv_f6 = ll.Conv2DLayer(conv6, num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=linear,
+    conv_f6 = ll.Conv2DLayer(bn6, num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=linear,
                              name='conv_4xpred')
     softmax_4 = Softmax4D(conv_f6, name='4dsoftmax_4x') # 4x downsample
     softmax_4_merge = ll.ElemwiseSumLayer([softmax_4, softmax_4up], coeffs=0.5, name='softmax_4_merge')
@@ -179,7 +243,7 @@ def build_segmenter_jet_2():
 
     ## COMBINE BY UPSAMPLING SOFTMAX_4_MERGE AND CONV 4
     softmax_2up = ll.Upscale2DLayer(softmax_4_merge, 2, name='upsample_2x_pre') # 2x downsample
-    conv_f4 = ll.Conv2DLayer(conv4, num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=linear,
+    conv_f4 = ll.Conv2DLayer(bn4, num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=linear,
                              name='conv_2xpred')
 
     softmax_2 = Softmax4D(conv_f4, name='4dsoftmax_2x')
@@ -189,7 +253,7 @@ def build_segmenter_jet_2():
 
     ## COMBINE BY UPSAMPLING SOFTMAX_2_MERGE AND CONV 2
     softmax_1up = ll.Upscale2DLayer(softmax_2_merge, 2, name='upsample_1x_pre') # 1x downsample (i.e. no downsample)
-    conv_f2 = ll.Conv2DLayer(conv2, num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=linear,
+    conv_f2 = ll.Conv2DLayer(bn2, num_filters=2, filter_size=(3,3), pad='same', W=Orthogonal(), nonlinearity=linear,
                              name='conv_1xpred')
 
     softmax_1 = Softmax4D(conv_f2, name='4dsoftmax_1x')
@@ -295,7 +359,7 @@ def preproc_dataset(dataset):
     pixel_weights = np.ones((labels.shape[0], labels.shape[2], labels.shape[3]), dtype='float32')
     # theoretically there would be 1/32 edge to non-edge ratio
     # but the way it's sampled doesn't really lead to that, it's more like a 1/50, and they're important
-    pixel_weights[np.argmax(labels, axis=1) == 0] = 1e2
+    pixel_weights[np.argmax(labels, axis=1) == 0] = 1e1
 
     return shuffle_dataset({'X':patches, 'y':labels, 'pixelw':pixel_weights})
 
@@ -331,7 +395,8 @@ def loss_iter(segmenter, update_params={}):
     #all_params = list(chain(*[ll.get_all_params(pred) for pred in segmenter]))
     all_params = ll.get_all_params(segmenter, trainable=True) # this should work with multiple 'roots'
     grads = T.grad(loss_train, all_params, add_names=True)
-    updates = nesterov_momentum(grads, all_params, update_params['l_r'], momentum=update_params['momentum'])
+    updates = adam(grads, all_params)
+    #updates = nesterov_momentum(grads, all_params, update_params['l_r'], momentum=update_params['momentum'])
     acc_train = accuracy(predicted_masks_train[-1])
     acc_valid = accuracy(predicted_mask_valid)
     prec_train = precision(predicted_masks_train[-1])
@@ -369,6 +434,8 @@ SEGMENTERS = {
     'jet':build_segmenter_jet,
     'jet2':build_segmenter_jet_2,
     'jet_preconv':build_segmenter_jet_preconv,
+    'absurd':build_segmenter_simple_absurd,
+    'absurd_res':build_segmenter_simple_absurd_res,
 }
 
 if __name__ == "__main__":
