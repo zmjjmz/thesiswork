@@ -463,7 +463,7 @@ if __name__ == "__main__":
     toc = time.time() - tic
     epoch_losses = []
     batch_losses = []
-    kp_extractor = build_kpextractor128_decoupled()
+    kp_extractor = build_kpextractor64_decoupled()
     model_path = join(dataset_loc, "Flukes/kpts/%s/model.pkl" % dset_name)
     if options.resume and exists(model_path):
         with open(model_path, 'r') as f:

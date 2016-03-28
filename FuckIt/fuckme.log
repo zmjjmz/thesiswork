@@ -1,0 +1,39 @@
+Using gpu device 0: GeForce GTX TITAN X (CNMeM is disabled)
+/home/zach/envs/thesis/local/lib/python2.7/site-packages/Theano-0.8.0.dev0-py2.7.egg/theano/tensor/signal/downsample.py:5: UserWarning: downsample module has been moved to the pool module.
+  warnings.warn("downsample module has been moved to the pool module.")
+Couldn't import dot_parser, loading of dot files will not be possible.
+
++------
+
+<!!! WARNING !!!>
+[!custom_layers] WARNING: GPU seems unavailable
+<type 'exceptions.ImportError'>: No module named pylearn2.sandbox.cuda_convnet.filter_acts
+</!!! WARNING !!!>
+
+L______
+
+Trying /home/zach/envs/thesis/local/lib/python2.7/site-packages/flann-1.8.4-py2.7.egg/pyflann/lib/libflann.so
+Loading dataset
+Loading /home/zach/data/Flukes/patches/fuckit_all_256
+[util_io] * load_cPkl(u'.../fuckit_all_256/meanstd.pkl')
+[util_io] * load_cPkl(u'.../fuckit_all_256/train.pkl')
+[util_io] * load_cPkl(u'.../fuckit_all_256/val.pkl')
+[util_io] * load_cPkl(u'.../fuckit_all_256/test.pkl')
+Took 0.97 seconds
+Compiliing network for embedding
+Elemwise{add,no_inplace}.0
+Checkpoint reached
+Traceback (most recent call last):
+  File "fuckit_network.py", line 302, in <module>
+    iter_funcs = loss_iter(embedder, update_params=momentum_params)
+  File "fuckit_network.py", line 158, in loss_iter
+    grads = T.grad(loss_train, all_params, add_names=True)
+  File "/home/zach/envs/thesis/local/lib/python2.7/site-packages/Theano-0.8.0.dev0-py2.7.egg/theano/gradient.py", line 545, in grad
+    handle_disconnected(elem)
+  File "/home/zach/envs/thesis/local/lib/python2.7/site-packages/Theano-0.8.0.dev0-py2.7.egg/theano/gradient.py", line 532, in handle_disconnected
+    raise DisconnectedInputError(message)
+theano.gradient.DisconnectedInputError: grad method was asked to compute the gradient with respect to a variable that is not part of the computational graph of the cost, or is used only by a non-differentiable operator: mean
+Backtrace when the node is created:
+  File "/home/zach/envs/thesis/local/lib/python2.7/site-packages/Lasagne-0.2.dev1-py2.7.egg/lasagne/utils.py", line 334, in create_param
+    return theano.shared(arr, name=name)
+
